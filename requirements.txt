@@ -1,0 +1,38 @@
+six==1.15.0
+tqdm==4.67.1
+PyYAML==6.0
+requests==2.25.1
+protobuf==3.20.0
+
+numpy==1.22.4
+scipy     
+pandas>=1.3.0
+numba>=0.56.4
+
+# Image / Data processing
+Pillow==9.0.1
+scikit-image==0.19.3
+h5py
+
+# Visualization
+matplotlib>=3.5.0
+seaborn==0.11.1
+
+# Pytorch
+torch==2.1.2
+torchvision==0.16.2  
+torchdiffeq
+pytorch_lightning==2.1.2
+tensorboardX==2.5
+torchquad==0.4.1
+torchtestcase==2018.2
+
+# Jax
+jax==0.2.25
+ml_collections==0.1.0
+
+# Others
+absl-py==0.12.0      
+sacred==0.8.2
+scikit-learn
+POT==0.9.5

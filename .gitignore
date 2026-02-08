@@ -1,0 +1,12 @@
+osdre/
+results/
+**/.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+ENV/
+*.log
+*.tmp
