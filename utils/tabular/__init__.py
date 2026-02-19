@@ -1,4 +1,4 @@
-root = '../data/density_estimation/tabular/'
+root = '../data/tabular/'
 
 from .power import POWER
 from .gas import GAS
