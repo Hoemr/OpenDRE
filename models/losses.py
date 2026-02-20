@@ -742,6 +742,9 @@ class NeuralDensityRatioTrainStepFn:
         self.reg_param = getattr(args, 'reg_param', 0.1)
         self.sde = sde
         
+        # Check if SDE is available for NLL calculation (done once at init)
+        self.has_sde = sde is not None and hasattr(sde, 'prior_logp')
+        
         # Exponential Weight (EW) parameter
         self.ew_alpha = getattr(args, 'ew_alpha', 2.0)  # Default from paper
         
@@ -784,27 +787,30 @@ class NeuralDensityRatioTrainStepFn:
     
     def _calc_nll(self, log_r_px, px_batch):
         # NLL = - log p1(x) = - (log r(x) + log p0(x))
+        # Return 0 if SDE is not available (checked once at init)
+        if not self.has_sde:
+            return torch.zeros_like(log_r_px)
         return - (log_r_px + self.sde.prior_logp(px_batch))
     
     def compute_weight_function(self, x, tau=50.0):
         """
-        论文中的权重函数：w(x) = exp(-||x||^4_4 / τ)
+        Weight function from the paper: w(x) = exp(-||x||^4_4 / tau)
         
-        严格按论文Example 3.2实现：
-        - L4范数: ||x||^4_4 = sum_{i=1}^d x_i^4
-        - τ: 温度参数，控制权重衰减速度
+        Implemented according to paper Example 3.2:
+        - L4 norm: ||x||^4_4 = sum_{i=1}^d x_i^4
+        - tau: temperature parameter controlling weight decay rate
         
         Args:
-            x: 输入数据 [batch_size, dim]
-            tau: 温度参数（论文中使用50）
+            x: input data [batch_size, dim]
+            tau: temperature parameter (50 in the paper)
         
         Returns:
-            w(x): 权重值 [batch_size, 1]
+            w(x): weight values [batch_size, 1]
         """
-        # 计算L4范数：||x||^4_4 = sum(x_i^4)
+        # Compute L4 norm: ||x||^4_4 = sum(x_i^4)
         l4_norm = torch.sum(x**4, dim=1, keepdim=True)
         
-        # 权重函数：w(x) = exp(-||x||^4_4 / τ)
+        # Weight function: w(x) = exp(-||x||^4_4 / tau)
         weights = torch.exp(-l4_norm / tau)
         
         return weights.detach()
@@ -863,7 +869,7 @@ class NeuralDensityRatioTrainStepFn:
         log_r_qx = model(qx) # f(x) for x ~ p0
         log_r_px = model(px) # f(x) for x ~ p1
         
-        # 对应于分类损失 BCE
+        # Classification loss (BCE)
         loss_q = torch.mean(F.softplus(log_r_qx))    # E_{p0}[log(1 + r)]
         loss_p = torch.mean(F.softplus(-log_r_px))   # E_{p1}[log(1 + 1/r)]
         
@@ -1010,7 +1016,7 @@ class NeuralDensityRatioTrainStepFn:
         return loss, nll
     
     def hellinger_loss(self, model, qx, px):
-        """
+        r"""
         Hellinger Distance Loss (Approximation via f-Divergence).
         f(r) = (sqrt(r) - 1)^2. 
         Dual form: E_{p0}[r] - 2 * E_{p1}[\sqrt{r}] + 1
@@ -1116,7 +1122,7 @@ class NeuralDensityRatioTrainStepFn:
         """
         KLIEP-style loss (kernel approximation).
         Minimizes KL(p1 || r * p0) = -E_{p1}[log r(x)] + E_{p0}[r(x)]
-        with soft constraint E_{p0}[r(x)] ≈ 1 via penalty.
+        with soft constraint E_{p0}[r(x)] approx 1 via penalty.
         """
         log_r_qx = model(qx)  # log r(x), x ~ p0
         log_r_px = model(px)  # log r(x), x ~ p1
@@ -1130,9 +1136,9 @@ class NeuralDensityRatioTrainStepFn:
         # KLIEP objective: -E_{p1}[log r] + E_{p0}[r]
         kl_term = -torch.mean(log_r_px) + torch.mean(r_qx)
 
-        # Optional: enforce E_{p0}[r(x)] ≈ 1 (normalization constraint)
+        # Optional: enforce E_{p0}[r(x)] approx 1 (normalization constraint)
         loss = kl_term #+ self.reg_param * (torch.mean(r_qx) - 1.0) ** 2
-        nll = - (log_r_px + self.sde.prior_logp(px))
+        nll = self._calc_nll(log_r_px, px)
         
         return loss, nll
     

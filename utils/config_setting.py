@@ -119,7 +119,7 @@ def get_likelihood_args(parser):
     parser.add_argument('--batch_num', type=int, default=100)
     
     # real image datasets
-    parser.add_argument("--data_dir", type=str, default="./data/density_estimation")
+    parser.add_argument("--data_dir", type=str, default="../data")
     parser.add_argument("--layer_mode", type=str, default="conv")
     parser.add_argument('--val_split', type=float, default=0.1)
 
@@ -145,7 +145,7 @@ def get_fdiv_args(parser):
     parser.add_argument('--shift_steps', type=int, default=5)
     
     # mutual_information for real data
-    parser.add_argument("--data_dir", type=str, default="./data/density_ratio_estimation")
+    parser.add_argument("--data_dir", type=str, default="../data")
     # parser.add_argument("--mi_dtype", type=str, default="image", choices=["gaussian", "image", "text", "mixture"], help="Type of data to use for MI estimation")
     parser.add_argument("--mi_dname1", type=str, default="mnist", choices=["mnist", "cifar10", "cifar100"], help="Dataset name for image data")
     parser.add_argument("--mi_dname2", type=str, default="imdb.bert-imdb-finetuned", choices=["imdb.bert-imdb-finetuned", "imdb.roberta-imdb-finetuned"], help="Dataset name for text data")
