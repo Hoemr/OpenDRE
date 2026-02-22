@@ -321,7 +321,8 @@ def parse_args():
             args.dims = "128-256-512"  # Same as real_image for CNN
             args.epochs = 1000
             args.batch_size = 512
-            args.eval_freq = 10
+            args.batch_num = 100
+            args.eval_freq = 1
             args.reload_interval = args.epochs
             
             # OOD detection uses neural method (density ratio estimation)

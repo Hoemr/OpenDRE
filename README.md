@@ -235,34 +235,223 @@ def get_fdiv_args(parser):
 
 ### Step 3: Add DataModule to pl_data.py
 
-Create a DataModule class for OOD detection:
+Create a Dataset class and DataModule class for OOD detection:
 
 ```python
 # In models/pl_data.py
-class OutOfDistributionDetectionDataModule(pl.LightningDataModule):
+class OODDetectionDataset(Dataset):
+    """
+    Dataset for OOD detection with paired (x_in, x_ood) samples.
+    Used for training density ratio estimators for OOD detection.
+    """
+    def __init__(self, in_dist_dataset, ood_dataset):
+        self.in_dist_dataset = in_dist_dataset
+        self.ood_dataset = ood_dataset
+        # Use the smaller length to ensure paired batches
+        self.num_samples = min(len(in_dist_dataset), len(ood_dataset))
+    
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        # Get in-distribution sample
+        x_in, _ = self.in_dist_dataset[idx]
+        # Get OOD sample
+        x_ood, _ = self.ood_dataset[idx]
+        return x_in, x_ood
+
+class OutOfDistributionDetectionDataModule(DataModule):
+    """
+    DataModule for Out-of-Distribution (OOD) detection.
+    
+    Supports training density ratio estimators for OOD detection using:
+        - 'local': Cropped-resized in-distribution samples as synthetic OOD
+        - 'general': Different dataset as OOD (e.g., CIFAR-10 vs SVHN)
+        - 'universal': 300K random images (Outlier Exposure)
+    
+    Training returns (x_in, x_ood) pairs where:
+        - x_in: In-distribution samples
+        - x_ood: Out-of-distribution samples
+    """
     def __init__(self, args):
-        super().__init__()
-        self.args = args
-        self.data_dir = getattr(args, 'ood_data_dir', '../data')
-        self.in_dist = getattr(args, 'ood_in_dist', 'mnist')
-        self.batch_size = args.batch_size
+        super().__init__(args)
+        self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
+        self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
+        self.ood_noise_std = getattr(args, 'ood_noise_std', 0.1)
+        self.ood_anneal_alpha_init = getattr(args, 'ood_anneal_alpha_init', 0.0)
+        self.ood_crop_size = getattr(args, 'ood_crop_size', 12)
         
+        # Set num_workers to 0 for simplicity
+        self.num_workers = 0
+        
+    def prepare_data(self):
+        # Download datasets if needed
+        if self.ood_in_dist == 'mnist':
+            dset.MNIST(self.args.data_dir, train=True, download=True)
+            dset.MNIST(self.args.data_dir, train=False, download=True)
+        elif self.ood_in_dist == 'fashion_mnist':
+            dset.FashionMNIST(self.args.data_dir, train=True, download=True)
+            dset.FashionMNIST(self.args.data_dir, train=False, download=True)
+        elif self.ood_in_dist == 'cifar10':
+            dset.CIFAR10(self.args.data_dir, train=True, download=True)
+            dset.CIFAR10(self.args.data_dir, train=False, download=True)
+        elif self.ood_in_dist == 'cifar100':
+            dset.CIFAR100(self.args.data_dir, train=True, download=True)
+            dset.CIFAR100(self.args.data_dir, train=False, download=True)
+
     def setup(self, stage=None):
-        # Load in-distribution and OOD datasets
-        # This is simplified - see actual implementation for details
-        pass
+        # Get transforms
+        transform_train = self._get_transform(train=True)
+        transform_test = self._get_transform(train=False)
+        
+        # Get in-distribution dataset
+        in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
+        
+        # Get OOD dataset
+        ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
+        
+        if (stage == "fit" or stage == "validate") or stage is None:
+            self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
+            
+            # Validation: use test set for in-dist, and appropriate OOD
+            in_dist_val = self._get_in_dist_dataset(train=False, transform=transform_test)
+            ood_val = self._get_ood_dataset(train=False, transform=transform_test)
+            self.val_dataset = OODDetectionDataset(in_dist_val, ood_val)
+        
+        if stage == "test" or stage is None:
+            # Test: use test set
+            in_dist_test = self._get_in_dist_dataset(train=False, transform=transform_test)
+            ood_test = self._get_ood_dataset(train=False, transform=transform_test)
+            self.test_dataset = OODDetectionDataset(in_dist_test, ood_test)
     
-    def train_dataloader(self):
-        # Return training data loader
-        pass
+    def _get_transform(self, train=True):
+        """Get transform for in-distribution dataset."""
+        if self.ood_in_dist in ['mnist', 'fashion_mnist']:
+            transform_list = [
+                transforms.Resize(32),
+                transforms.RandomHorizontalFlip() if train else transforms.Lambda(lambda x: x),
+                transforms.ToTensor(),
+                transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.shape[0] == 1 else x),
+            ]
+        else:  # CIFAR
+            transform_list = [
+                transforms.RandomHorizontalFlip() if train else transforms.Lambda(lambda x: x),
+                transforms.ToTensor(),
+            ]
+        
+        return transforms.Compose(transform_list)
     
-    def val_dataloader(self):
-        # Return validation data loader  
-        pass
+    def _get_crop_transform(self):
+        """Get crop transform for local OOD detection."""
+        from torchvision.transforms.functional import InterpolationMode
+        
+        if self.ood_in_dist in ['mnist', 'fashion_mnist']:
+            return transforms.Compose([
+                transforms.Resize(32),
+                transforms.RandomHorizontalFlip(),
+                transforms.Pad(2),
+                transforms.RandomCrop(32 - self.ood_crop_size),
+                transforms.Resize(32, interpolation=InterpolationMode.BILINEAR),
+                transforms.ToTensor(),
+                transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.shape[0] == 1 else x),
+            ])
+        else:
+            return transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(32 - self.ood_crop_size),
+                transforms.Resize(32, interpolation=InterpolationMode.BILINEAR),
+                transforms.ToTensor(),
+            ])
     
-    def test_dataloader(self):
-        # Return test data loader
-        pass
+    def _get_in_dist_dataset(self, train=True, transform=None):
+        """Get in-distribution dataset."""
+        if self.ood_in_dist == 'mnist':
+            return dset.MNIST(self.args.data_dir, train=train, download=False, transform=transform)
+        elif self.ood_in_dist == 'fashion_mnist':
+            return dset.FashionMNIST(self.args.data_dir, train=train, download=False, transform=transform)
+        elif self.ood_in_dist == 'cifar10':
+            return dset.CIFAR10(self.args.data_dir, train=train, download=False, transform=transform)
+        elif self.ood_in_dist == 'cifar100':
+            return dset.CIFAR100(self.args.data_dir, train=train, download=False, transform=transform)
+    
+    def _get_ood_dataset(self, train=True, transform=None):
+        """Get OOD dataset based on base_type."""
+        if self.ood_base_type == 'local':
+            # Local: cropped-resized in-distribution as synthetic OOD
+            crop_transform = self._get_crop_transform()
+            return self._get_in_dist_dataset(train=train, transform=crop_transform)
+        
+        elif self.ood_base_type == 'general':
+            # General: first OOD dataset in the list
+            ood_list = {
+                'mnist': 'fashion_mnist',
+                'fashion_mnist': 'mnist',
+                'cifar10': 'svhn',
+                'cifar100': 'svhn',
+            }
+            ood_name = ood_list.get(self.ood_in_dist, 'svhn')
+            return self._get_ood_by_name(ood_name, train=train)
+        
+        elif self.ood_base_type == 'universal':
+            # Universal: 300K random images
+            oe_file = os.path.join(self.args.data_dir, "300K_random_images.npy")
+            return OODRandomImagesDataset(oe_file)
+    
+    def _get_ood_by_name(self, ood_name, train=True):
+        """Get OOD dataset by name."""
+        if ood_name == 'mnist':
+            return dset.MNIST(self.args.data_dir, train=train, download=False, 
+                            transform=self._get_transform(train))
+        elif ood_name == 'fashion_mnist':
+            return dset.FashionMNIST(self.args.data_dir, train=train, download=False,
+                                    transform=self._get_transform(train))
+        elif ood_name == 'cifar10':
+            return dset.CIFAR10(self.args.data_dir, train=train, download=False,
+                               transform=self._get_transform(train))
+        elif ood_name == 'cifar100':
+            return dset.CIFAR100(self.args.data_dir, train=train, download=False,
+                                transform=self._get_transform(train))
+        elif ood_name == 'svhn':
+            return dset.SVHN(self.args.data_dir, split='train' if train else 'test',
+                            download=False, transform=self._get_transform(train))
+        elif ood_name == 'lsun':
+            lsun_path = os.path.join(self.args.data_dir, 'LSUN_resize')
+            return dset.LSUN(lsun_path, transform=self._get_transform(train))
+        elif ood_name == 'celeba':
+            return dset.CelebA(
+                root=self.args.data_dir,
+                split="test" if not train else "train",
+                transform=transforms.Compose([transforms.Resize([32, 32]), transforms.ToTensor()]),
+                download=False,
+            )
+
+
+class OODRandomImagesDataset(Dataset):
+    """Dataset for universal OOD detection using random images."""
+    
+    def __init__(self, npy_file, transform=None):
+        self.data = np.load(npy_file)
+        self.transform = transform
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, idx):
+        img = self.data[idx]
+        
+        # Handle different data formats
+        if isinstance(img, np.ndarray):
+            # Data is in [N, H, W, C] format with values [0, 255]
+            if img.dtype != np.uint8:
+                img = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8)
+            # Convert to tensor
+            img = torch.from_numpy(img).float() / 255.0
+            if img.dim() == 2:  # Grayscale [H, W]
+                img = img.unsqueeze(0).repeat(3, 1, 1)
+            elif img.dim() == 3 and img.shape[0] != 3:  # [H, W, C] format
+                img = img.permute(2, 0, 1)
+        
+        return img, 0
 ```
 
 ### Step 4: Add Model Class to pl_models.py

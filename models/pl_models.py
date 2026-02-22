@@ -594,10 +594,58 @@ class DensityRatioEstimationModel(pl.LightningModule):
         else:
             raise ValueError(f"Invalid sub_method {self.args.sub_method}")
 
-    def build_model(self):
-        """Constructs the neural network based on decomposition choice."""
+    def _get_image_backbone(self):
+        """Check if we should use image backbone (ResNet/WideResNet)."""
+        image_backbone = getattr(self.args, 'image_backbone', None)
+        return image_backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']
+
+    def _build_model_with_image_backbone(self):
+        """Build model with ResNet/WideResNet backbone for image tasks."""
+        image_backbone = getattr(self.args, 'image_backbone', 'resnet18')
+        image_dropout = getattr(self.args, 'image_dropout', 0.3)
+        hidden_channels = list(map(int, self.args.dims.split("-")))
+        in_channels = 3  # RGB images
+        
+        if self.args.sub_method == "neural":
+            return base_models.ResNetDensityRatioModel(
+                in_channels=in_channels,
+                num_classes=1,
+                backbone=image_backbone,
+                dropout=image_dropout
+            )
+        elif self.args.sub_method == "score":
+            if self.decomp:
+                return base_models.ImageDecompJointScoreModelResNet(
+                    args=self.args,
+                    in_channels=in_channels,
+                    hidden_channels=hidden_channels,
+                    embed_dim=self.args.embed_dim,
+                    K=self.args.K_decomp,
+                    polynomials=self.args.polynomials,
+                    noise_type=self.args.noise_type,
+                    backbone=image_backbone,
+                    dropout=image_dropout
+                )
+            else:
+                return base_models.ImageJointScoreModelResNet(
+                    args=self.args,
+                    in_channels=in_channels,
+                    hidden_channels=hidden_channels,
+                    embed_dim=self.args.embed_dim,
+                    backbone=image_backbone,
+                    dropout=image_dropout
+                )
+        else:
+            # Kernel method - fallback to default
+            hidden_dims = list(map(int, self.args.dims.split("-")))
+            return base_models.KernelDensityRatioModel(
+                self.args, sde=self.sde, method=self.subsub_method
+            )
+
+    def _build_default_model(self):
+        """Build default model without image backbone."""
         hidden_dims = list(map(int, self.args.dims.split("-")))
-        input_shape = (self.d,)
+        
         if self.args.sub_method == "kernel":
             return base_models.KernelDensityRatioModel(
                 self.args, sde=self.sde, method=self.subsub_method
@@ -611,7 +659,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
                 norm=self.args.norm,
                 use_spectral_norm=self.args.specnorm,
             )
-        else:
+        else:  # score
             if self.decomp:
                 return base_models.DecompJointScoreModel(
                     input_dim=self.d,
@@ -635,6 +683,14 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     norm=self.args.norm,
                     use_spectral_norm=self.args.specnorm,
                 )
+
+    def build_model(self):
+        """Constructs the neural network based on task type and settings."""
+        # Check if we should use image backbone (ResNet/WideResNet)
+        if self._get_image_backbone():
+            return self._build_model_with_image_backbone()
+        else:
+            return self._build_default_model()
     
     def get_dr_fn(self):
         return get_density_ratio_fn(self.sde, args=self.args, quad_step=self.args.quad_step)
@@ -1003,115 +1059,38 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
         self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
         
-        # Use generic image backbone settings (shared across all image-based tasks)
-        self.image_backbone = getattr(args, 'image_backbone', 'resnet18')
-        self.image_dropout = getattr(args, 'image_dropout', 0.3)
+        # Training metrics storage
+        self.train_loss_sum = 0.0
+        self.train_loss_count = 0
         
-        # Metrics storage for OOD evaluation
+        # OOD metrics storage
         self.ood_metrics_db = []
-    
-    def build_model(self):
-        """Build OOD detection model - supports ResNet/WideResNet for both neural and score methods."""
-        # Check if we should use ResNet/WideResNet backbone
-        image_backbone = getattr(self.args, 'image_backbone', None)
-        image_dropout = getattr(self.args, 'image_dropout', 0.3)
-        
-        if image_backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']:
-            # Use ResNet/WideResNet backbone
-            if self.args.sub_method == "neural":
-                # Neural method: use ResNetDensityRatioModel
-                self.model = base_models.ResNetDensityRatioModel(
-                    in_channels=3,
-                    num_classes=1,
-                    backbone=image_backbone,
-                    dropout=image_dropout
-                )
-                self.use_cnn_backbone = True
-                return self.model
-            elif self.args.sub_method == "score":
-                # Score method: use ImageJointScoreModelResNet or ImageDecompJointScoreModelResNet
-                hidden_channels = list(map(int, self.args.dims.split("-")))
-                in_channels = 3  # RGB images
-                
-                if self.decomp:
-                    self.model = base_models.ImageDecompJointScoreModelResNet(
-                        args=self.args,
-                        in_channels=in_channels,
-                        hidden_channels=hidden_channels,
-                        embed_dim=self.args.embed_dim,
-                        K=self.args.K_decomp,
-                        polynomials=self.args.polynomials,
-                        noise_type=self.args.noise_type,
-                        backbone=image_backbone,
-                        dropout=image_dropout
-                    )
-                else:
-                    self.model = base_models.ImageJointScoreModelResNet(
-                        args=self.args,
-                        in_channels=in_channels,
-                        hidden_channels=hidden_channels,
-                        embed_dim=self.args.embed_dim,
-                        backbone=image_backbone,
-                        dropout=image_dropout
-                    )
-                self.use_cnn_backbone = True
-                return self.model
-            else:
-                # Kernel method - use default
-                self.use_cnn_backbone = False
-                hidden_dims = list(map(int, self.args.dims.split("-")))
-                return base_models.KernelDensityRatioModel(
-                    self.args, sde=self.sde, method=self.subsub_method
-                )
-        else:
-            # Use default model (no ResNet backbone)
-            self.use_cnn_backbone = False
-            hidden_dims = list(map(int, self.args.dims.split("-")))
-            if self.args.sub_method == "kernel":
-                return base_models.KernelDensityRatioModel(
-                    self.args, sde=self.sde, method=self.subsub_method
-                )
-            elif self.args.sub_method == "neural":
-                return base_models.NeuralDensityRatioModel(
-                    input_dim=self.args.d,
-                    hidden_dims=hidden_dims,
-                    nonlinearity=self.args.nonlinearity,
-                    args=self.args,
-                    norm=self.args.norm,
-                    use_spectral_norm=self.args.specnorm,
-                )
-            else:
-                if self.decomp:
-                    return base_models.DecompJointScoreModel(
-                        input_dim=self.d,
-                        hidden_dims=hidden_dims,
-                        embed_dim=self.args.embed_dim,
-                        K=self.args.K_decomp,
-                        polynomials=self.args.polynomials,
-                        nonlinearity=self.args.nonlinearity,
-                        noise_type=self.args.noise_type,
-                        args=self.args,
-                        norm=self.args.norm,
-                        use_spectral_norm=self.args.specnorm,
-                    )
-                else:
-                    return base_models.JointScoreModel(
-                        input_dim=self.d,
-                        hidden_dims=hidden_dims,
-                        embed_dim=self.args.embed_dim,
-                        nonlinearity=self.args.nonlinearity,
-                        args=self.args,
-                        norm=self.args.norm,
-                        use_spectral_norm=self.args.specnorm,
-                    )
     
     def training_step(self, batch, batch_idx):
         # For OOD detection: px=x_in (in-dist), qx=x_ood (OOD)
         px, qx, _ = self.prepare_batch(batch)
         loss_dict = self.train_step_fn(self.model, (qx, px), step=self.global_step)
-        self.log("train_loss", loss_dict["loss"], on_step=True, on_epoch=True, 
-                 prog_bar=True, logger=True, sync_dist=True, batch_size=px.size(0))
+        
+        # Accumulate loss for epoch average (only log at epoch end)
+        self.train_loss_sum += loss_dict["loss"].item() * px.size(0)
+        self.train_loss_count += px.size(0)
+        
+        # Return loss, don't log per step
         return loss_dict["loss"]
+    
+    def on_train_epoch_end(self):
+        # Compute average training loss for this epoch
+        avg_train_loss = self.train_loss_sum / max(self.train_loss_count, 1)
+        
+        # Log epoch-level metrics
+        self.log("train_loss", avg_train_loss, on_step=False, on_epoch=True, 
+                 prog_bar=True, logger=True, sync_dist=True)
+        
+        # Reset for next epoch
+        self.train_loss_sum = 0.0
+        self.train_loss_count = 0
+        
+        super().on_train_epoch_end()
     
     def compute_ood_scores(self, batch: torch.Tensor) -> torch.Tensor:
         """
@@ -1139,12 +1118,7 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         in_scores = self.compute_ood_scores(px)
         ood_scores = self.compute_ood_scores(qx)
         
-        # Log OOD detection metrics
-        self.log("val_in_score_mean", in_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
-        self.log("val_ood_score_mean", ood_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
-        self.log("val_score_gap", in_scores.mean() - ood_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
-        
-        # Store outputs for epoch end
+        # Store outputs for epoch end computation
         step_output = {
             "in_scores": in_scores,
             "ood_scores": ood_scores,
@@ -1155,8 +1129,40 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         return step_output
     
     def on_validation_epoch_end(self):
-        # For OOD detection, we don't need the same aggregation as the base class
-        # Just clear the outputs to avoid memory leak
+        # Compute aggregated OOD metrics at epoch end
+        if len(self.validation_step_outputs) == 0:
+            self.validation_step_outputs.clear()
+            return
+            
+        all_in_scores = torch.cat([out["in_scores"] for out in self.validation_step_outputs])
+        all_ood_scores = torch.cat([out["ood_scores"] for out in self.validation_step_outputs])
+        total_samples = sum(out["batch_size"] for out in self.validation_step_outputs)
+        
+        # Compute AUROC
+        from sklearn.metrics import roc_auc_score
+        labels = torch.cat([torch.ones(len(all_in_scores)), torch.zeros(len(all_ood_scores))])
+        scores = torch.cat([all_in_scores, all_ood_scores])
+        
+        try:
+            auroc = roc_auc_score(labels.cpu().numpy(), scores.cpu().numpy())
+            self.log("val_auroc", auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        except:
+            pass
+        
+        # Log epoch-level metrics
+        self.log("val_in_score_mean", all_in_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log("val_ood_score_mean", all_ood_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log("val_score_gap", all_in_scores.mean() - all_ood_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        
+        # Store for later analysis
+        self.ood_metrics_db.append({
+            "epoch": self.current_epoch,
+            "auroc": auroc if 'auroc' in dir() else 0.0,
+            "in_score_mean": all_in_scores.mean().item(),
+            "ood_score_mean": all_ood_scores.mean().item(),
+        })
+        
+        # Clear outputs
         self.validation_step_outputs.clear()
     
     def test_step(self, batch, batch_idx):
@@ -1175,13 +1181,13 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         from sklearn.metrics import roc_auc_score
         try:
             auroc = roc_auc_score(labels.cpu().numpy(), scores.cpu().numpy())
-            self.log("test_auroc", auroc, on_epoch=True, prog_bar=True, logger=True)
+            self.log("test_auroc", auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         except:
             pass
         
         # Log additional metrics
-        self.log("test_in_score_mean", in_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
-        self.log("test_ood_score_mean", ood_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
+        self.log("test_in_score_mean", in_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log("test_ood_score_mean", ood_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
         
         return {"in_scores": in_scores, "ood_scores": ood_scores, "auroc": auroc if 'auroc' in dir() else 0.0}
 

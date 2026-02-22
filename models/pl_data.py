@@ -608,114 +608,6 @@ class TwoSampleTestIterDataModule(IterDataModule):
 
 # In[] f-div : change point detection
 CHANGEPOINT_DATASETS = ['cpd_mc', 'cpd_text', 'cpd_creditcard']
-# class ChangePointDetectionDataset(Dataset):
-#     def __init__(self, data_generator, num_samples=1000, d=6, data_type="cpd_mc", experiment_id=0, rng=None):
-#         """
-#         Args:
-#             data_generator: An instance of the data generator.
-#             num_samples: Number of samples to generate.
-#             d: Dimensionality of the data.
-#             data_type: Type of data to load ("cpd_mc", "cpd_text", "cpd_creditcard").
-#             experiment_id: Identifier for the experiment (used in Monte Carlo data generation).
-#             rng: Random number generator (optional).
-#         """
-#         if data_type == "cpd_mc":
-#             data = data_generator.sample_monte_carlo(
-#                 num_samples=num_samples, d=d, experiment_id=experiment_id
-#             )
-#         elif data_type == "cpd_text":
-#             data = data_generator.load_and_process_text_data()
-#         elif data_type == "cpd_creditcard":
-#             data = data_generator.load_and_process_creditcard_data()
-#         else:
-#             raise ValueError(f"Unsupported data type: {data_type}")
-        
-#         self.data = data
-
-#     def __len__(self):
-#         return self.data.size(0)
-
-#     def __getitem__(self, idx):
-#         return self.data[idx]
-
-# class ChangePointDetectionDataModule(DataModule):
-#     def __init__(self, args):
-#         super().__init__(args)
-#         self.num_workers = 4
-#         self.generator =  data_utils.ChangePointDetectionDataGenerator(data_type=self.data_type, d=self.d, rng=None, args=args)
-        
-#         # Store CPD specific parameters
-#         self.num_samples = getattr(args, 'num_samples', args.batch_num * args.batch_size)
-#         self.d = getattr(args, 'd', 6)
-#         self.experiment_id = getattr(args, 'experiment_id', 0)
-    
-#     def setup(self, stage=None):
-#         """Setup datasets for different stages."""
-#         full_dataset = ChangePointDetectionDataset(
-#             data_generator=self.generator,
-#             data_type=self.data_type
-#         )
-#         full_data = full_dataset.data  # shape: (T, d)
-        
-#         if stage == "fit" or stage is None:
-#             # Training: shuffle to get i.i.d. samples
-#             shuffled_indices = torch.randperm(full_data.size(0))
-#             self.train_dataset = torch.utils.data.TensorDataset(full_data[shuffled_indices])
-
-#         if stage == "validate" or stage is None:
-#             # Validation: keep time order
-#             self.val_dataset = torch.utils.data.TensorDataset(full_data)
-
-#         if stage == "test" or stage is None:
-#             # Test: keep time order
-#             self.test_dataset = torch.utils.data.TensorDataset(full_data)
-        
-#         # if self.data_type in ["cpd_text", "cpd_creditcard "]:   # real datasets
-#         #     full_dataset = ChangePointDetectionDataset(
-#         #         data_generator=self.generator,
-#         #         data_type=self.data_type
-#         #     )
-            
-#         #     dataset_size = len(full_dataset)
-#         #     train_size = int(0.7 * dataset_size)
-#         #     val_size = int(0.15 * dataset_size)
-#         #     test_size = dataset_size - train_size - val_size
-            
-#         #     self.train_dataset, self.val_dataset, self.test_dataset = torch.utils.data.random_split(
-#         #         full_dataset, [train_size, val_size, test_size],
-#         #         generator=torch.Generator().manual_seed(self.seed)
-#         #     )
-
-#         # else:
-#         #     # simulated datasets
-#         #     if (stage == "fit" or stage == "validate") or stage is None:
-#         #         # Training dataset
-#         #         self.train_dataset = ChangePointDetectionDataset(
-#         #             data_generator=self.generator,
-#         #             num_samples=self.num_samples,
-#         #             d=self.d,
-#         #             data_type=self.data_type,
-#         #             experiment_id=self.experiment_id
-#         #         )
-                
-#         #         # Validation dataset
-#         #         self.val_dataset = ChangePointDetectionDataset(
-#         #             data_generator=self.generator,
-#         #             num_samples=self.num_samples,
-#         #             d=self.d,
-#         #             data_type=self.data_type,
-#         #             experiment_id=self.experiment_id + 1000
-#         #         )
-            
-#         #     if stage == "test" or stage is None:
-#         #         # Test dataset
-#         #         self.test_dataset = ChangePointDetectionDataset(
-#         #             data_generator=self.generator,
-#         #             num_samples=self.num_samples,
-#         #             d=self.d,
-#         #             data_type=self.data_type,
-#         #             experiment_id=self.experiment_id + 2000
-#         #         )
 
 class DREPairDataset(Dataset):
     """
@@ -802,19 +694,29 @@ class ChangePointDetectionDataModule(DataModule):
 OOD_IN_DIST_DATASETS = ['mnist', 'fashion_mnist', 'cifar10', 'cifar100']
 OOD_BASE_TYPES = ['local', 'general', 'universal']
 
-class OODDetectionIterDataset(IterableDataset):
-    """Iterable dataset for OOD detection with streaming (px, qx) pairs."""
-    def __init__(self, generator, batch_size=5000, batch_num=1):
-        self.generator = generator
-        self.batch_size = batch_size
-        self.batch_num = batch_num
-        
-    def __iter__(self):
-        for _ in range(self.batch_num):
-            x_in, x_ood, true_mi = self.generator.sample(batch_size=self.batch_size)
-            yield x_in, x_ood, true_mi
+class OODDetectionDataset(Dataset):
+    """
+    Dataset for OOD detection with paired (x_in, x_ood) samples.
+    Used for training density ratio estimators for OOD detection.
+    """
+    def __init__(self, in_dist_dataset, ood_dataset):
+        self.in_dist_dataset = in_dist_dataset
+        self.ood_dataset = ood_dataset
+        # Use the smaller length to ensure paired batches
+        self.num_samples = min(len(in_dist_dataset), len(ood_dataset))
+    
+    def __len__(self):
+        return self.num_samples
 
-class OutOfDistributionDetectionDataModule(IterDataModule):
+    def __getitem__(self, idx):
+        # Get in-distribution sample
+        x_in, _ = self.in_dist_dataset[idx]
+        # Get OOD sample
+        x_ood, _ = self.ood_dataset[idx]
+        # Return dummy label (0.0) for compatibility with prepare_batch
+        return x_in, x_ood, torch.tensor(0.0)
+
+class OutOfDistributionDetectionDataModule(DataModule):
     """
     DataModule for Out-of-Distribution (OOD) detection.
     
@@ -828,7 +730,7 @@ class OutOfDistributionDetectionDataModule(IterDataModule):
         - x_ood: Out-of-distribution samples
     
     Usage:
-        python main.py --data ood_detection --ood_in_dist mnist --ood_base_type universal
+        python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --ood_base_type universal
     """
     def __init__(self, args):
         super().__init__(args)
@@ -837,30 +739,178 @@ class OutOfDistributionDetectionDataModule(IterDataModule):
         self.ood_noise_std = getattr(args, 'ood_noise_std', 0.1)
         self.ood_anneal_alpha_init = getattr(args, 'ood_anneal_alpha_init', 0.0)
         self.ood_crop_size = getattr(args, 'ood_crop_size', 12)
-        self.generator = None
+        
+        # Set num_workers to 0 for simplicity
+        self.num_workers = 0
+        
+    def prepare_data(self):
+        # Download datasets if needed
+        if self.ood_in_dist == 'mnist':
+            dset.MNIST(self.args.data_dir, train=True, download=True)
+            dset.MNIST(self.args.data_dir, train=False, download=True)
+        elif self.ood_in_dist == 'fashion_mnist':
+            dset.FashionMNIST(self.args.data_dir, train=True, download=True)
+            dset.FashionMNIST(self.args.data_dir, train=False, download=True)
+        elif self.ood_in_dist == 'cifar10':
+            dset.CIFAR10(self.args.data_dir, train=True, download=True)
+            dset.CIFAR10(self.args.data_dir, train=False, download=True)
+        elif self.ood_in_dist == 'cifar100':
+            dset.CIFAR100(self.args.data_dir, train=True, download=True)
+            dset.CIFAR100(self.args.data_dir, train=False, download=True)
 
     def setup(self, stage=None):
-        # Set args for generator configuration
-        self.generator = data_utils.OutOfDistributionDetectionDatasetGenerator(
-            in_dist=self.ood_in_dist,
-            base_type=self.ood_base_type,
-            data_dir=self.args.data_dir,
-            args=self.args
-        )
+        # Get transforms
+        transform_train = self._get_transform(train=True)
+        transform_test = self._get_transform(train=False)
         
-        self.train_dataset = OODDetectionIterDataset(
-            self.generator,
-            batch_size=self.batch_size,
-            batch_num=self.batch_num
-        )
+        # Get in-distribution dataset
+        in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
         
-        self.val_dataset = OODDetectionIterDataset(
-            self.generator,
-            batch_size=self.test_batch_size,
-            batch_num=1
-        )
+        # Get OOD dataset
+        ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
         
-        self.test_dataset = self.val_dataset
+        if (stage == "fit" or stage == "validate") or stage is None:
+            self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
+            
+            # Validation: use test set for in-dist, and appropriate OOD
+            in_dist_val = self._get_in_dist_dataset(train=False, transform=transform_test)
+            ood_val = self._get_ood_dataset(train=False, transform=transform_test)
+            self.val_dataset = OODDetectionDataset(in_dist_val, ood_val)
+        
+        if stage == "test" or stage is None:
+            # Test: use test set
+            in_dist_test = self._get_in_dist_dataset(train=False, transform=transform_test)
+            ood_test = self._get_ood_dataset(train=False, transform=transform_test)
+            self.test_dataset = OODDetectionDataset(in_dist_test, ood_test)
+    
+    def _get_transform(self, train=True):
+        """Get transform for in-distribution dataset."""
+        if self.ood_in_dist in ['mnist', 'fashion_mnist']:
+            transform_list = [
+                transforms.Resize(32),
+                transforms.RandomHorizontalFlip() if train else transforms.Lambda(lambda x: x),
+                transforms.ToTensor(),
+                transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.shape[0] == 1 else x),
+            ]
+        else:  # CIFAR
+            transform_list = [
+                transforms.RandomHorizontalFlip() if train else transforms.Lambda(lambda x: x),
+                transforms.ToTensor(),
+            ]
+        
+        return transforms.Compose(transform_list)
+    
+    def _get_crop_transform(self):
+        """Get crop transform for local OOD detection."""
+        from torchvision.transforms.functional import InterpolationMode
+        
+        if self.ood_in_dist in ['mnist', 'fashion_mnist']:
+            return transforms.Compose([
+                transforms.Resize(32),
+                transforms.RandomHorizontalFlip(),
+                transforms.Pad(2),
+                transforms.RandomCrop(32 - self.ood_crop_size),
+                transforms.Resize(32, interpolation=InterpolationMode.BILINEAR),
+                transforms.ToTensor(),
+                transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.shape[0] == 1 else x),
+            ])
+        else:
+            return transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(32 - self.ood_crop_size),
+                transforms.Resize(32, interpolation=InterpolationMode.BILINEAR),
+                transforms.ToTensor(),
+            ])
+    
+    def _get_in_dist_dataset(self, train=True, transform=None):
+        """Get in-distribution dataset."""
+        if self.ood_in_dist == 'mnist':
+            return dset.MNIST(self.args.data_dir, train=train, download=False, transform=transform)
+        elif self.ood_in_dist == 'fashion_mnist':
+            return dset.FashionMNIST(self.args.data_dir, train=train, download=False, transform=transform)
+        elif self.ood_in_dist == 'cifar10':
+            return dset.CIFAR10(self.args.data_dir, train=train, download=False, transform=transform)
+        elif self.ood_in_dist == 'cifar100':
+            return dset.CIFAR100(self.args.data_dir, train=train, download=False, transform=transform)
+    
+    def _get_ood_dataset(self, train=True, transform=None):
+        """Get OOD dataset based on base_type."""
+        if self.ood_base_type == 'local':
+            # Local: cropped-resized in-distribution as synthetic OOD
+            crop_transform = self._get_crop_transform()
+            return self._get_in_dist_dataset(train=train, transform=crop_transform)
+        
+        elif self.ood_base_type == 'general':
+            # General: first OOD dataset in the list
+            ood_list = {
+                'mnist': 'fashion_mnist',
+                'fashion_mnist': 'mnist',
+                'cifar10': 'svhn',
+                'cifar100': 'svhn',
+            }
+            ood_name = ood_list.get(self.ood_in_dist, 'svhn')
+            return self._get_ood_by_name(ood_name, train=train)
+        
+        elif self.ood_base_type == 'universal':
+            # Universal: 300K random images
+            oe_file = os.path.join(self.args.data_dir, "300K_random_images.npy")
+            return OODRandomImagesDataset(oe_file)
+    
+    def _get_ood_by_name(self, ood_name, train=True):
+        """Get OOD dataset by name."""
+        if ood_name == 'mnist':
+            return dset.MNIST(self.args.data_dir, train=train, download=False, 
+                            transform=self._get_transform(train))
+        elif ood_name == 'fashion_mnist':
+            return dset.FashionMNIST(self.args.data_dir, train=train, download=False,
+                                    transform=self._get_transform(train))
+        elif ood_name == 'cifar10':
+            return dset.CIFAR10(self.args.data_dir, train=train, download=False,
+                               transform=self._get_transform(train))
+        elif ood_name == 'cifar100':
+            return dset.CIFAR100(self.args.data_dir, train=train, download=False,
+                                transform=self._get_transform(train))
+        elif ood_name == 'svhn':
+            return dset.SVHN(self.args.data_dir, split='train' if train else 'test',
+                            download=False, transform=self._get_transform(train))
+        elif ood_name == 'lsun':
+            lsun_path = os.path.join(self.args.data_dir, 'LSUN_resize')
+            return dset.LSUN(lsun_path, transform=self._get_transform(train))
+        elif ood_name == 'celeba':
+            return dset.CelebA(
+                root=self.args.data_dir,
+                split="test" if not train else "train",
+                transform=transforms.Compose([transforms.Resize([32, 32]), transforms.ToTensor()]),
+                download=False,
+            )
+
+
+class OODRandomImagesDataset(Dataset):
+    """Dataset for universal OOD detection using random images."""
+    
+    def __init__(self, npy_file, transform=None):
+        self.data = np.load(npy_file)
+        self.transform = transform
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, idx):
+        img = self.data[idx]
+        
+        # Handle different data formats
+        if isinstance(img, np.ndarray):
+            # Data is in [N, H, W, C] format with values [0, 255]
+            if img.dtype != np.uint8:
+                img = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8)
+            # Convert to tensor
+            img = torch.from_numpy(img).float() / 255.0
+            if img.dim() == 2:  # Grayscale [H, W]
+                img = img.unsqueeze(0).repeat(3, 1, 1)
+            elif img.dim() == 3 and img.shape[0] != 3:  # [H, W, C] format
+                img = img.permute(2, 0, 1)
+        
+        return img, 0
 
 
 # In[]

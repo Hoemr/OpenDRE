@@ -78,6 +78,10 @@ class TxtLoggerCallback(pl.Callback):
             self._handle_validation_epoch_end = self._fdiv_val
             if self.subtask == "mi_realdata":
                 self._handle_train_epoch_end = self._fdiv_mi_train
+            elif self.subtask == "ood_detection":
+                self._handle_train_epoch_end = self._ood_train
+                self._handle_validation_epoch_end = self._ood_val
+                self._handle_test_epoch_end = self._ood_test
 
     def _noop(self, trainer, pl_module):
         pass
@@ -290,6 +294,45 @@ class TxtLoggerCallback(pl.Callback):
                 'val_mae':       lambda v: f"MAE {v:.4f}",
                 'val_nfe':       lambda v: f"NFE {v}",
             }
+        )
+    
+    # =====================================================
+    # =================== OOD Detection ==================
+    # =====================================================
+    def _ood_train(self, trainer, pl_module):
+        self._log_epoch(
+            trainer=trainer,
+            metrics=self._get_metrics(trainer, ['train_loss']),
+            formatters={'train_loss': lambda v: f"Loss {v:.4f}"}
+        )
+    
+    def _ood_val(self, trainer, pl_module):
+        self._log_epoch(
+            trainer=trainer,
+            metrics=self._get_metrics(
+                trainer, ['val_auroc', 'val_in_score_mean', 'val_ood_score_mean', 'val_score_gap']
+            ),
+            formatters={
+                'val_auroc':         lambda v: f"AUROC {v:.4f}",
+                'val_in_score_mean':  lambda v: f"In Score {v:.4f}",
+                'val_ood_score_mean': lambda v: f"OOD Score {v:.4f}",
+                'val_score_gap':      lambda v: f"Score Gap {v:.4f}",
+            }
+        )
+    
+    def _ood_test(self, trainer, pl_module):
+        self._log_epoch(
+            trainer=trainer,
+            prefix="Test",
+            metrics=self._get_metrics(
+                trainer, ['test_auroc', 'test_in_score_mean', 'test_ood_score_mean']
+            ),
+            formatters={
+                'test_auroc':         lambda v: f"AUROC {v:.4f}",
+                'test_in_score_mean':  lambda v: f"In Score {v:.4f}",
+                'test_ood_score_mean': lambda v: f"OOD Score {v:.4f}",
+            },
+            use_max_epoch=False
         )
     
     # =====================================================
