@@ -134,7 +134,7 @@ def get_fdiv_args(parser):
     parser.add_argument("--method", type=str, default="dre", choices=["dre", "MINE"])
     parser.add_argument("--sub_method", type=str, default="score", choices=[*SUB_METHODS])
     parser.add_argument("--subsub_method", type=str, default="dre_infty", choices=[subsub for sub_method in SUB_METHODS for subsub in SUBSUB_METHODS[sub_method]])
-    parser.add_argument("--subtask", type=str, default="distribution_shift", choices=["distribution_shift", "mutual_information", "mi_realdata", "change_point_detection"])
+    parser.add_argument("--subtask", type=str, default="distribution_shift", choices=["distribution_shift", "mutual_information", "mi_realdata", "change_point_detection", "ood_detection"])
     
     # training parameters
     parser.add_argument('--batch_num', type=int, default=1)
@@ -162,6 +162,19 @@ def get_fdiv_args(parser):
     # change point detection
     parser.add_argument('--cpd_swl', type=int, default=64, help='Sliding window length for change point detection')
     parser.add_argument('--use_simplex', type=eval, default=False, choices=[True, False], help='Use simplex instead of Gaussian noise for CPD')
+    
+    # OOD detection
+    parser.add_argument('--ood_in_dist', type=str, default='mnist', choices=['mnist', 'fashion_mnist', 'cifar10', 'cifar100'], help='In-distribution dataset for OOD detection')
+    parser.add_argument('--ood_base_type', type=str, default='universal', choices=['local', 'general', 'universal'], help='Base distribution type for OOD detection')
+    parser.add_argument('--ood_noise_std', type=float, default=0.1, help='Noise standard deviation for OOD detection')
+    parser.add_argument('--ood_anneal_alpha_init', type=float, default=0.142857, help='Initial annealing alpha for mixup')
+    parser.add_argument('--ood_anneal_gamma', type=float, default=1.0, help='Annealing gamma for alpha')
+    parser.add_argument('--ood_crop_size', type=int, default=12, help='Crop size for local OOD detection')
+    parser.add_argument("--ood_data_dir", type=str, default="../data")
+    
+    # Image backbone (ResNet or WideResNet for all image-related tasks)
+    parser.add_argument('--image_backbone', type=str, default='resnet18', choices=['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'], help='Backbone network for image-based tasks (OOD detection, real images, etc.)')
+    parser.add_argument('--image_dropout', type=float, default=0.3, help='Dropout rate for WideResNet backbone')
     return parser
 
 def set_image_args(args):
@@ -300,6 +313,24 @@ def parse_args():
                 import numpy as np
                 if np.prod(image_patches) != args.mi_ds:
                     raise ValueError(f"Product of image_patches {image_patches} must equal ds={args.mi_ds}")
+        
+        elif args.subtask == "ood_detection":
+            # python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --ood_base_type universal --epochs 1000 --batch_size 512 --lr 0.01
+            # Set OOD detection specific args
+            args = set_image_args(args)
+            args.dims = "128-256-512"  # Same as real_image for CNN
+            args.epochs = 1000
+            args.batch_size = 512
+            args.eval_freq = 10
+            args.reload_interval = args.epochs
+            
+            # OOD detection uses neural method (density ratio estimation)
+            # Set sub_method to neural and subsu_method to logistic (works well with ResNet)
+            if args.sub_method not in ["neural"]:
+                args.sub_method = "neural"
+            # Set default subsub_method for neural method
+            if args.subsub_method in SUBSUB_METHODS.get("score", []):
+                args.subsub_method = "logistic"
     
     return args
 
@@ -323,6 +354,9 @@ def get_save_path(args):
             
         if args.subtask == "mutual_information":
             key_args.extend(["rho"+str(args.rho)])
+        
+        if args.subtask == "ood_detection":
+            key_args.extend([args.ood_in_dist, args.ood_base_type])
   
     else:
         raise ValueError(f"Task {args.task} is not implemented!")

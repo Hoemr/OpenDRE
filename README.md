@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-This repository provides a unified implementation of score-based density ratio estimation methods, integrating multiple state-of-the-art papers from top-tier machine learning venues (NeurIPS, ICML, ICLR). The framework supports likelihood estimation, f-divergence estimation, mutual information estimation, and change point detection.
+This repository provides a unified implementation of score-based density ratio estimation methods, integrating multiple state-of-the-art papers from top-tier machine learning venues (NeurIPS, ICML, ICLR). The framework supports likelihood estimation, f-divergence estimation, mutual information estimation, change point detection, and out-of-distribution (OOD) detection.
 
 ## Overview
 
@@ -12,13 +12,15 @@ Score-based generative modeling has emerged as a powerful paradigm for learning 
 - **Kernel Methods**: Kernel Density Ratio Estimation
 - **Neural Methods**: KULSIF, NCE, InfoNCE, RKL, Hellinger, KL, Gamma, EW, PW
 - **Continuous Normalizing Flows**: ODE-based likelihood computation
+- **Image Backbones**: ResNet-18/34/50, WideResNet-28-10 for image-based tasks
 
 ### Key Features
 
 - 🚀 **Unified Interface**: Single entry point (`main.py`) for all tasks and methods
 - 📊 **Comprehensive Benchmarks**: Synthetic 2D, tabular, image datasets
 - 🔧 **Flexible Configuration**: Extensive hyperparameter control via command-line args
-- 📈 **Multi-Task Support**: Likelihood estimation, f-divergence, MI, CPD
+- 📈 **Multi-Task Support**: Likelihood estimation, f-divergence, MI, CPD, OOD detection
+- 🖼️ **Image Backbones**: Support for ResNet and WideResNet architectures
 
 ## Installation
 
@@ -66,6 +68,12 @@ python main.py fdiv_estimation --subtask mutual_information --data diag_multi_ga
 
 # Change point detection
 python main.py fdiv_estimation --subtask change_point_detection --data cpd_text --use_simplex True --cpd_swl 64
+
+# OOD detection (with ResNet-18)
+python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --image_backbone resnet18 --epochs 100 --batch_size 512
+
+# OOD detection (with WideResNet-28-10, recommended for CIFAR)
+python main.py fdiv_estimation --subtask ood_detection --ood_in_dist cifar10 --image_backbone wideresnet28_10 --epochs 100 --batch_size 512
 ```
 
 ## Supported Tasks and Datasets
@@ -86,6 +94,7 @@ python main.py fdiv_estimation --subtask change_point_detection --data cpd_text 
 | `mutual_information` | half_cube_map, asinh_mapping, additive_noise, gamma_exponential, diag_multi_gauss, gauss | Estimate mutual information I(X;Y) |
 | `mi_realdata` | image, text, mixture | Real-world MI estimation (MNIST, IMDB, CIFAR-10) |
 | `change_point_detection` | cpd_mc, cpd_text, cpd_creditcard | Detect change points in time series |
+| `ood_detection` | mnist, fashion_mnist, cifar10, cifar100 | Detect out-of-distribution samples |
 
 ## Method Configuration
 
@@ -121,6 +130,19 @@ python main.py likelihood_estimation --subtask synthetic2d --sub_method neural -
 python main.py likelihood_estimation --subtask synthetic2d --sub_method kernel
 ```
 
+### Image Backbone Options (for image-based tasks)
+
+```bash
+# Use ResNet-18 backbone (default for MNIST-like datasets)
+python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --image_backbone resnet18
+
+# Use ResNet-50 backbone
+python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --image_backbone resnet50
+
+# Use WideResNet-28-10 (recommended for CIFAR-10/100)
+python main.py fdiv_estimation --subtask ood_detection --ood_in_dist cifar10 --image_backbone wideresnet28_10 --image_dropout 0.3
+```
+
 ## Key Arguments Reference
 
 | Argument | Default | Description |
@@ -140,6 +162,210 @@ python main.py likelihood_estimation --subtask synthetic2d --sub_method kernel
 | `--decomp` | False | Enable score decomposition |
 | `--seed` | 3407 | Random seed |
 
+### OOD Detection Specific Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--ood_in_dist` | `mnist` | In-distribution dataset |
+| `--ood_base_type` | `universal` | Base distribution type: local, general, universal |
+| `--ood_noise_std` | 0.1 | Noise standard deviation |
+| `--ood_data_dir` | `../data` | Data directory |
+| `--image_backbone` | `resnet18` | Image backbone: resnet18, resnet34, resnet50, wideresnet28_10 |
+| `--image_dropout` | 0.3 | Dropout rate for WideResNet |
+
+---
+
+# Tutorial: Adding New Tasks and Datasets
+
+This section provides a step-by-step guide to adding new tasks (e.g., OOD detection) and datasets to OS_DRE.
+
+## Overview of Architecture
+
+OS_DRE uses a modular design with three main components:
+
+```
+main.py → pl_data (DataModule) → pl_models (Model) → training
+```
+
+1. **main.py**: Entry point, parses arguments and coordinates everything
+2. **pl_data.py**: Defines datasets and DataModule (data loading)
+3. **pl_models.py**: Defines PyTorch Lightning models (training/validation)
+4. **config_setting.py**: Defines task-specific arguments
+5. **base_models.py**: Neural network architectures
+
+## Tutorial: Adding OOD Detection (Complete Example)
+
+This is a real example of how OOD detection was added to OS_DRE.
+
+### Step 1: Add Dataset to pl_data.py
+
+First, add the dataset name to the appropriate list:
+
+```python
+# In models/pl_data.py
+OOD_DETECTION_DATASETS = ['mnist', 'fashion_mnist', 'cifar10', 'cifar100']
+```
+
+### Step 2: Add Arguments to config_setting.py
+
+Add task-specific arguments in the `get_fdiv_args` function:
+
+```python
+# In utils/config_setting.py
+def get_fdiv_args(parser):
+    # ... existing code ...
+    
+    # OOD detection arguments
+    parser.add_argument('--ood_in_dist', type=str, default='mnist', 
+                       choices=['mnist', 'fashion_mnist', 'cifar10', 'cifar100'],
+                       help='In-distribution dataset for OOD detection')
+    parser.add_argument('--ood_base_type', type=str, default='universal',
+                       choices=['local', 'general', 'universal'],
+                       help='Base distribution type for OOD detection')
+    
+    # Generic image backbone (shared across image tasks)
+    parser.add_argument('--image_backbone', type=str, default='resnet18',
+                       choices=['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'],
+                       help='Backbone network for image-based tasks')
+    parser.add_argument('--image_dropout', type=float, default=0.3,
+                       help='Dropout rate for WideResNet')
+    
+    return parser
+```
+
+### Step 3: Add DataModule to pl_data.py
+
+Create a DataModule class for OOD detection:
+
+```python
+# In models/pl_data.py
+class OutOfDistributionDetectionDataModule(pl.LightningDataModule):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.data_dir = getattr(args, 'ood_data_dir', '../data')
+        self.in_dist = getattr(args, 'ood_in_dist', 'mnist')
+        self.batch_size = args.batch_size
+        
+    def setup(self, stage=None):
+        # Load in-distribution and OOD datasets
+        # This is simplified - see actual implementation for details
+        pass
+    
+    def train_dataloader(self):
+        # Return training data loader
+        pass
+    
+    def val_dataloader(self):
+        # Return validation data loader  
+        pass
+    
+    def test_dataloader(self):
+        # Return test data loader
+        pass
+```
+
+### Step 4: Add Model Class to pl_models.py
+
+Create a model class that inherits from `DensityRatioEstimationModel`:
+
+```python
+# In models/pl_models.py
+class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
+    def __init__(self, args, save_path, datamodule):
+        super().__init__(args, save_path, datamodule)
+        self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
+        self.image_backbone = getattr(args, 'image_backbone', 'resnet18')
+        
+    def build_model(self):
+        # Build ResNet/WideResNet or default model
+        image_backbone = getattr(self.args, 'image_backbone', None)
+        if image_backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']:
+            self.model = base_models.ResNetDensityRatioModel(
+                in_channels=3,
+                num_classes=1,
+                backbone=image_backbone,
+                dropout=getattr(self.args, 'image_dropout', 0.3)
+            )
+        else:
+            # Use default neural network
+            pass
+    
+    def training_step(self, batch, batch_idx):
+        # OOD-specific training logic
+        px, qx, _ = self.prepare_batch(batch)
+        loss_dict = self.train_step_fn(self.model, (qx, px), step=self.global_step)
+        return loss_dict["loss"]
+    
+    def validation_step(self, batch, batch_idx):
+        # Compute and log OOD metrics
+        pass
+```
+
+### Step 5: Register the Model in SUBTASK_MODLE_MODULES
+
+```python
+# In models/pl_models.py
+SUBTASK_MODLE_MODULES = {
+    # ... existing entries ...
+    "ood_detection": OutOfDistributionDetectionModel,
+}
+```
+
+### Step 6: Register DataModule in main.py
+
+```python
+# In main.py
+from models.pl_data import (
+    # ... existing imports ...
+    OutOfDistributionDetectionDataModule
+)
+
+# In the main() function
+if args.subtask == "ood_detection":
+    datamodule = OutOfDistributionDetectionDataModule(args)
+```
+
+## Key Patterns
+
+### 1. Understanding the Density Ratio Framework
+
+Most tasks in OS_DRE are based on density ratio estimation:
+- **px** (t=1): Target distribution (e.g., in-distribution for OOD)
+- **qx** (t=0): Reference distribution (e.g., noise or OOD samples)
+- The model learns to estimate r(x) = px(x) / qx(x)
+
+### 2. Adding New Datasets
+
+For simple synthetic datasets:
+
+```python
+# In utils/data_utils.py
+class NewDatasetGenerator(Generator):
+    def generate(self, n_samples, **kwargs):
+        # Generate samples from your distribution
+        return samples
+```
+
+For real datasets, add to the appropriate list in `pl_data.py` and implement the loading logic.
+
+### 3. Custom Loss Functions
+
+If you need a custom loss, add it to `models/losses.py`:
+
+```python
+class CustomDensityRatioTrainStepFn:
+    def __init__(self, args, sde, method):
+        self.args = args
+        self.sde = sde
+        self.method = method
+        
+    def __call__(self, model, batch, step):
+        qx, px = batch
+        # Your custom training logic
+        return {"loss": loss, "nll": nll}
+```
+
 ## Architecture
 
 ```
@@ -150,18 +376,18 @@ OS_DRE/
 │   ├── SDE.py                 # SDE/ODE solvers (VPSDE, subVPSDE, Bridge)
 │   ├── estimators.py          # Likelihood & density ratio estimators
 │   ├── losses.py              # Training loss functions
-│   ├── ncsn_unet.py           # Score-based UNet architecture
-│   ├── layers.py              # Neural network layers
+│   ├── ncsn_unet.py          # Score-based UNet architecture
+│   ├── layers.py              # Neural network layers (including ResNet, WideResNet)
 │   ├── pl_models.py           # PyTorch Lightning wrappers
 │   ├── pl_data.py             # Data modules
 │   └── nsf/                   # Neural Spline Flows integration
 ├── utils/
-│   ├── config_setting.py       # Argument parsing & configuration
+│   ├── config_setting.py      # Argument parsing & configuration
 │   ├── data_utils.py          # Data generators
 │   ├── sampling.py            # Sampling methods (HMC, AIS)
 │   ├── visualization.py       # Plotting utilities
 │   └── logger.py              # Logging utilities
-└── results/                  # Experiment outputs
+└── results/                   # Experiment outputs
 ```
 
 ## Citation

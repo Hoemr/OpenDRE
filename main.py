@@ -264,6 +264,9 @@ def train_fdiv_estimation(args):
     elif args.subtask == "mi_realdata":
         callbacks = [txt_logger_callback]
         accumulate_grad_batches = 5
+
+    elif args.subtask == "ood_detection":
+        callbacks = [txt_logger_callback]
     else:
         raise ValueError(f"Invalid subtask {args.subtask}")
 

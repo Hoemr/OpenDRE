@@ -971,6 +971,221 @@ class ChangePointDetectionModel(DensityRatioEstimationModel):
         self.on_epoch_end(self.test_step_outputs)
         self.test_step_outputs.clear()  # avoid memory leak
 
+# In[] OOD Detection Model
+class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
+    """
+    Model for Out-of-Distribution (OOD) detection.
+    
+    Uses density ratio estimation to distinguish between in-distribution and OOD samples.
+    Training returns (x_in, x_ood) pairs where:
+        - x_in: In-distribution samples (label 1)
+        - x_ood: Out-of-distribution samples (label 0)
+    
+    The model learns to estimate r(x) = p(x) / q(x) where:
+        - p(x): in-distribution density
+        - q(x): OOD density (or reference noise)
+    
+    For OOD detection:
+        - High r(x): in-distribution
+        - Low r(x): out-of-distribution
+    
+    Usage:
+        # With neural method (default, uses ResNetDensityRatioModel)
+        python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --ood_base_type universal
+        
+        # With score method (uses ResNet-based ImageJointScoreModel or ImageDecompJointScoreModel)
+        python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --sub_method score --image_backbone resnet18
+    """
+    def __init__(self, args, save_path, datamodule):
+        super().__init__(args, save_path, datamodule)
+        
+        # OOD-specific parameters
+        self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
+        self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
+        
+        # Use generic image backbone settings (shared across all image-based tasks)
+        self.image_backbone = getattr(args, 'image_backbone', 'resnet18')
+        self.image_dropout = getattr(args, 'image_dropout', 0.3)
+        
+        # Metrics storage for OOD evaluation
+        self.ood_metrics_db = []
+    
+    def build_model(self):
+        """Build OOD detection model - supports ResNet/WideResNet for both neural and score methods."""
+        # Check if we should use ResNet/WideResNet backbone
+        image_backbone = getattr(self.args, 'image_backbone', None)
+        image_dropout = getattr(self.args, 'image_dropout', 0.3)
+        
+        if image_backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']:
+            # Use ResNet/WideResNet backbone
+            if self.args.sub_method == "neural":
+                # Neural method: use ResNetDensityRatioModel
+                self.model = base_models.ResNetDensityRatioModel(
+                    in_channels=3,
+                    num_classes=1,
+                    backbone=image_backbone,
+                    dropout=image_dropout
+                )
+                self.use_cnn_backbone = True
+                return self.model
+            elif self.args.sub_method == "score":
+                # Score method: use ImageJointScoreModelResNet or ImageDecompJointScoreModelResNet
+                hidden_channels = list(map(int, self.args.dims.split("-")))
+                in_channels = 3  # RGB images
+                
+                if self.decomp:
+                    self.model = base_models.ImageDecompJointScoreModelResNet(
+                        args=self.args,
+                        in_channels=in_channels,
+                        hidden_channels=hidden_channels,
+                        embed_dim=self.args.embed_dim,
+                        K=self.args.K_decomp,
+                        polynomials=self.args.polynomials,
+                        noise_type=self.args.noise_type,
+                        backbone=image_backbone,
+                        dropout=image_dropout
+                    )
+                else:
+                    self.model = base_models.ImageJointScoreModelResNet(
+                        args=self.args,
+                        in_channels=in_channels,
+                        hidden_channels=hidden_channels,
+                        embed_dim=self.args.embed_dim,
+                        backbone=image_backbone,
+                        dropout=image_dropout
+                    )
+                self.use_cnn_backbone = True
+                return self.model
+            else:
+                # Kernel method - use default
+                self.use_cnn_backbone = False
+                hidden_dims = list(map(int, self.args.dims.split("-")))
+                return base_models.KernelDensityRatioModel(
+                    self.args, sde=self.sde, method=self.subsub_method
+                )
+        else:
+            # Use default model (no ResNet backbone)
+            self.use_cnn_backbone = False
+            hidden_dims = list(map(int, self.args.dims.split("-")))
+            if self.args.sub_method == "kernel":
+                return base_models.KernelDensityRatioModel(
+                    self.args, sde=self.sde, method=self.subsub_method
+                )
+            elif self.args.sub_method == "neural":
+                return base_models.NeuralDensityRatioModel(
+                    input_dim=self.args.d,
+                    hidden_dims=hidden_dims,
+                    nonlinearity=self.args.nonlinearity,
+                    args=self.args,
+                    norm=self.args.norm,
+                    use_spectral_norm=self.args.specnorm,
+                )
+            else:
+                if self.decomp:
+                    return base_models.DecompJointScoreModel(
+                        input_dim=self.d,
+                        hidden_dims=hidden_dims,
+                        embed_dim=self.args.embed_dim,
+                        K=self.args.K_decomp,
+                        polynomials=self.args.polynomials,
+                        nonlinearity=self.args.nonlinearity,
+                        noise_type=self.args.noise_type,
+                        args=self.args,
+                        norm=self.args.norm,
+                        use_spectral_norm=self.args.specnorm,
+                    )
+                else:
+                    return base_models.JointScoreModel(
+                        input_dim=self.d,
+                        hidden_dims=hidden_dims,
+                        embed_dim=self.args.embed_dim,
+                        nonlinearity=self.args.nonlinearity,
+                        args=self.args,
+                        norm=self.args.norm,
+                        use_spectral_norm=self.args.specnorm,
+                    )
+    
+    def training_step(self, batch, batch_idx):
+        # For OOD detection: px=x_in (in-dist), qx=x_ood (OOD)
+        px, qx, _ = self.prepare_batch(batch)
+        loss_dict = self.train_step_fn(self.model, (qx, px), step=self.global_step)
+        self.log("train_loss", loss_dict["loss"], on_step=True, on_epoch=True, 
+                 prog_bar=True, logger=True, sync_dist=True, batch_size=px.size(0))
+        return loss_dict["loss"]
+    
+    def compute_ood_scores(self, batch: torch.Tensor) -> torch.Tensor:
+        """
+        Compute OOD scores for a batch of samples.
+        
+        Higher scores indicate in-distribution, lower scores indicate OOD.
+        
+        Args:
+            batch: Input samples [batch_size, C, H, W]
+            
+        Returns:
+            ood_scores: OOD scores [batch_size,]
+        """
+        with torch.no_grad():
+            # Compute log density ratio: log r(x) = log p(x) - log q(x)
+            log_ratio, _ = self.density_ratio_fn(self.model, batch, joint=None)
+            # Use exp(log ratio) as OOD score (higher = more likely in-distribution)
+            ood_scores = log_ratio.squeeze()
+        return ood_scores
+    
+    def validation_step(self, batch, batch_idx):
+        px, qx, _ = self.prepare_batch(batch)
+        
+        # Compute OOD scores for both in-dist and OOD samples
+        in_scores = self.compute_ood_scores(px)
+        ood_scores = self.compute_ood_scores(qx)
+        
+        # Log OOD detection metrics
+        self.log("val_in_score_mean", in_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
+        self.log("val_ood_score_mean", ood_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
+        self.log("val_score_gap", in_scores.mean() - ood_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
+        
+        # Store outputs for epoch end
+        step_output = {
+            "in_scores": in_scores,
+            "ood_scores": ood_scores,
+            "batch_size": px.shape[0],
+        }
+        self.validation_step_outputs.append(step_output)
+        
+        return step_output
+    
+    def on_validation_epoch_end(self):
+        # For OOD detection, we don't need the same aggregation as the base class
+        # Just clear the outputs to avoid memory leak
+        self.validation_step_outputs.clear()
+    
+    def test_step(self, batch, batch_idx):
+        px, qx, _ = self.prepare_batch(batch)
+        
+        # Compute OOD scores
+        in_scores = self.compute_ood_scores(px)
+        ood_scores = self.compute_ood_scores(qx)
+        
+        # Compute AUROC for OOD detection
+        # Labels: 1 for in-distribution, 0 for OOD
+        labels = torch.cat([torch.ones(len(in_scores)), torch.zeros(len(ood_scores))])
+        scores = torch.cat([in_scores, ood_scores])
+        
+        # Calculate AUROC
+        from sklearn.metrics import roc_auc_score
+        try:
+            auroc = roc_auc_score(labels.cpu().numpy(), scores.cpu().numpy())
+            self.log("test_auroc", auroc, on_epoch=True, prog_bar=True, logger=True)
+        except:
+            pass
+        
+        # Log additional metrics
+        self.log("test_in_score_mean", in_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
+        self.log("test_ood_score_mean", ood_scores.mean(), on_epoch=True, prog_bar=True, logger=True)
+        
+        return {"in_scores": in_scores, "ood_scores": ood_scores, "auroc": auroc if 'auroc' in dir() else 0.0}
+
+
 # In[]
 SUBTASK_MODLE_MODULES = {
     "synthetic2d": DensityEstimation2DSyntheticModel,
@@ -981,4 +1196,5 @@ SUBTASK_MODLE_MODULES = {
     "mi_realdata": MIRealDataModel,
     "two_sample_test": TwoSampleTestModel,
     "change_point_detection":ChangePointDetectionModel,
+    "ood_detection": OutOfDistributionDetectionModel,
 }

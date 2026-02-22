@@ -1475,4 +1475,335 @@ class NeuralDensityRatioModel(nn.Module):
         for layer in self.time_head:
             x = layer(x)
             
-        return x  
+        return x
+
+
+# =====================================================
+# Image-based Density Ratio Models (ResNet/WideResNet)
+# =====================================================
+
+class ResNetDensityRatioModel(nn.Module):
+    """
+    Density ratio estimation model using ResNet or WideResNet backbone for image tasks.
+    Supports both ResNet (resnet18, resnet34, resnet50) and WideResNet-28-10 architectures.
+    
+    Args:
+        in_channels: Number of input channels (default: 3 for RGB)
+        num_classes: Number of output classes (default: 1 for density ratio)
+        backbone: Backbone architecture - 'resnet18', 'resnet34', 'resnet50', or 'wideresnet28_10'
+        dropout: Dropout rate for WideResNet (default: 0.3)
+    """
+    def __init__(self, in_channels=3, num_classes=1, backbone='resnet18', dropout=0.3):
+        super().__init__()
+        self.in_channels = in_channels
+        self.num_classes = num_classes
+        self.backbone_name = backbone
+        
+        # Build the backbone network
+        if backbone == 'resnet18':
+            self.backbone = Layers.ResNet18(out_dim=num_classes)
+        elif backbone == 'resnet34':
+            self.backbone = Layers.ResNet34(out_dim=num_classes)
+        elif backbone == 'resnet50':
+            self.backbone = Layers.ResNet50(out_dim=num_classes)
+        elif backbone == 'wideresnet28_10':
+            self.backbone = Layers.WideResNet2810(out_dim=num_classes, dropRate=dropout)
+        else:
+            raise ValueError(f"Unsupported backbone: {backbone}. Choose from: resnet18, resnet34, resnet50, wideresnet28_10")
+    
+    def forward(self, x):
+        """
+        Forward pass.
+        
+        Args:
+            x: Input images [batch_size, C, H, W]
+            
+        Returns:
+            Log density ratio [batch_size,]
+        """
+        # Ensure input has 3 channels
+        if x.shape[1] == 1:
+            x = x.repeat(1, 3, 1, 1)
+        
+        # Get logits from backbone
+        logits = self.backbone(x)  # [batch_size, num_classes]
+        
+        # Return logit as log density ratio
+        if self.num_classes == 1:
+            return logits.squeeze(-1)  # [batch_size,]
+        return logits
+
+
+# Alias for backward compatibility
+WideResNetDensityRatioModel = ResNetDensityRatioModel
+
+
+# =====================================================
+# Image-based Score Models with ResNet/WideResNet Backbone
+# =====================================================
+
+class ImageJointScoreModelResNet(nn.Module):
+    """
+    Image score model using ResNet or WideResNet backbone for non-decomposition method.
+    Replaces the custom encoder-decoder with more powerful ResNet/WideResNet.
+    
+    Args:
+        args: Arguments containing joint, SAI and other settings
+        in_channels: Number of input channels
+        hidden_channels: Hidden channel dimensions (used for time embedding)
+        embed_dim: Time embedding dimension
+        nonlinearity: Activation function
+        backbone: 'resnet18', 'resnet34', 'resnet50', or 'wideresnet28_10'
+        dropout: Dropout rate for WideResNet
+    """
+    def __init__(self, args, in_channels, hidden_channels, embed_dim=128, nonlinearity="leakyrelu",
+                 backbone='resnet18', dropout=0.3):
+        super().__init__()
+        self.args = args
+        self.in_channels = in_channels
+        self.hidden_channels = hidden_channels
+        self.embed_dim = embed_dim
+        self.joint = args.joint
+        self.backbone_name = backbone
+        
+        # Time embedding module
+        self.embed = Layers.FourierSinusoidalTimeEncoder(output_dim=embed_dim, nfreq=embed_dim)
+        if args.SAI:
+            self.time_fusion = nn.Sequential(
+                nn.Linear(embed_dim * 2, embed_dim),  
+                nn.SiLU(),
+                nn.Linear(embed_dim, embed_dim)    
+            )
+        
+        # Build ResNet/WideResNet backbone
+        if backbone == 'wideresnet28_10':
+            self.backbone = Layers.WideResNet2810(out_dim=hidden_channels[-1], dropRate=dropout)
+        elif backbone in ['resnet18', 'resnet34', 'resnet50']:
+            self.backbone = getattr(Layers, f'ResNet{backbone.replace("resnet", "")}')(out_dim=hidden_channels[-1])
+        else:
+            raise ValueError(f"Unsupported backbone: {backbone}")
+        
+        # Output dimensions from backbone
+        backbone_out_dim = hidden_channels[-1]
+        
+        # Time head (processes global features to get time score)
+        self.out_st = nn.Linear(backbone_out_dim, 1)
+        
+        # Data head (reconstructs image for joint method)
+        if self.joint:
+            # Upsampling to reconstruct image
+            self.data_head = nn.Sequential(
+                nn.Linear(backbone_out_dim, backbone_out_dim),
+                nn.SiLU(),
+                nn.Linear(backbone_out_dim, in_channels * 32 * 32)  # Assuming 32x32 images
+            )
+        
+        self.nfe = 0
+        
+    def reset_states(self):
+        self.nfe = 0
+
+    def forward(self, t, x, cond=None, joint=True):
+        self.nfe += 1
+        
+        # Get time embedding
+        t_emb = self.embed(t).squeeze()
+        if cond is not None:
+            rel_temb = self.embed(t - cond)
+            concat_emb = torch.cat([t_emb, rel_temb], dim=-1)
+            t_emb = self.time_fusion(concat_emb)
+        
+        # Process through backbone
+        # Ensure input has 3 channels
+        if x.shape[1] == 1 and self.in_channels == 3:
+            x = x.repeat(1, 3, 1, 1)
+        
+        features = self.backbone(x)  # [B, backbone_out_dim]
+        
+        # Time score
+        s_t = self.out_st(features).view(-1, 1)  # [B, 1]
+        
+        if self.joint and joint:
+            # Data score (image reconstruction)
+            s_x = self.data_head(features)
+            # Reshape to image format [B, C, H, W]
+            s_x = s_x.view(x.shape[0], self.in_channels, 32, 32)
+            return s_x, s_t
+        return s_t
+
+
+class ImageDecompJointScoreModelResNet(nn.Module):
+    """
+    Image score model with decomposition using ResNet or WideResNet backbone.
+    Uses polynomial decomposition for scalable score estimation.
+    
+    Args:
+        args: Arguments containing joint, num_time_head, K, etc.
+        in_channels: Number of input channels
+        hidden_channels: Hidden channel dimensions
+        embed_dim: Time embedding dimension
+        K: Number of polynomial components for decomposition
+        nonlinearity: Activation function
+        polynomials: Type of polynomials
+        noise_type: Noise type for polynomials
+        backbone: 'resnet18', 'resnet34', 'resnet50', or 'wideresnet28_10'
+        dropout: Dropout rate for WideResNet
+    """
+    def __init__(self, args, in_channels, hidden_channels, embed_dim=128, K=300, 
+                 nonlinearity="leakyrelu", polynomials="gaussrbf", noise_type="zero",
+                 backbone='resnet18', dropout=0.3):
+        super().__init__()
+        self.args = args
+        self.in_channels = in_channels
+        self.hidden_channels = hidden_channels
+        self.embed_dim = embed_dim
+        
+        self.num_time_head = args.num_time_head
+        self.joint = args.joint
+        self.K = K
+        self.time_act = args.time_act
+        self.backbone_name = backbone
+        
+        # Time embedding
+        self.time_embed = Layers.FourierSinusoidalTimeEncoder(output_dim=embed_dim, nfreq=embed_dim)
+        
+        # Build ResNet/WideResNet backbone
+        if backbone == 'wideresnet28_10':
+            self.backbone = Layers.WideResNet2810(out_dim=hidden_channels[-1], dropRate=dropout)
+        elif backbone in ['resnet18', 'resnet34', 'resnet50']:
+            self.backbone = getattr(Layers, f'ResNet{backbone.replace("resnet", "")}')(out_dim=hidden_channels[-1])
+        else:
+            raise ValueError(f"Unsupported backbone: {backbone}")
+        
+        backbone_out_dim = hidden_channels[-1]
+        
+        # Time head for decomposition
+        self.time_head = nn.Sequential(
+            nn.Linear(backbone_out_dim, backbone_out_dim),
+            nn.SiLU(),
+            nn.Linear(backbone_out_dim, K),
+            nn.AdaptiveAvgPool2d(1),
+            Layers.FourierSinusoidalTimeEncoder(output_dim=1, nfreq=K) if time_act == "identity" else nn.ReLU()
+        )
+        
+        # Data head for joint method
+        if self.joint:
+            self.data_head = nn.Sequential(
+                nn.Linear(backbone_out_dim, backbone_out_dim),
+                nn.SiLU(),
+                nn.Linear(backbone_out_dim, in_channels * 32 * 32)
+            )
+        
+        # Polynomials for decomposition
+        self.Pk = Pk.PerturbedFrame(K, noise_type=noise_type, polynomials=polynomials, shape_type=args.shape_type)
+        self.set_fk()
+        self._initialize_weights()
+        
+    def _get_activation(self, nonlinearity):
+        if nonlinearity in NONLINEARITIES.keys():
+            if nonlinearity == "dyt":
+                return NONLINEARITIES[nonlinearity](num_features=self.K, input_dim=4)
+            return NONLINEARITIES[nonlinearity]
+        else:
+            raise ValueError(f"Unsupported nonlinearity: {nonlinearity}")
+    
+    def _initialize_weights(self):
+        for name, module in self.named_modules():
+            if isinstance(module, (nn.Linear, nn.Conv2d, nn.Conv1d)):
+                act_name = self._detect_activation(module)
+                INIT_METHODS.get(act_name, INIT_METHODS["identity"])(module.weight)
+                if module.bias is not None:
+                    init.constant_(module.bias, 0)
+            elif isinstance(module, nn.GroupNorm):
+                init.constant_(module.weight, 1)
+                init.constant_(module.bias, 0)
+            elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                init.constant_(module.weight, 1)
+                init.constant_(module.bias, 0)
+    
+    def _detect_activation(self, layer):
+        for _, child in itertools.islice(layer.named_children(), 3):
+            if type(child) in ACTIVATION_TYPE_MAP:
+                return ACTIVATION_TYPE_MAP[type(child)]
+        return "identity"
+
+    def compute_weighted_sum(self, x, f_k=None):
+        """Compute the weighted sum: logq - logp = sum_{k=0}^{K} f_k(x) int_{0}^{1} g_k(t) dt."""
+        if f_k is None:
+            f_k = self.compute_fk(x)
+        weighted_sum = torch.sum(f_k * self.Pk.integrals, dim=-1, keepdim=True)
+        return weighted_sum.squeeze()
+    
+    def time_gradient(self, t, x, f_k=None):
+        if f_k is None:
+            f_k = self.compute_fk(x)
+        g_k = self.Pk.grad_function(t)
+        return torch.sum(f_k * g_k, dim=-1, keepdim=True)
+    
+    def set_fk(self, f_k=None):
+        self.fk = f_k
+        
+    def get_fk_reg(self, x=None):
+        if x is not None or self.fk is None:
+            return self.compute_fk(x)
+        else:
+            return self.fk
+    
+    def compute_fk(self, x):
+        # Ensure input has 3 channels
+        if x.shape[1] == 1 and self.in_channels == 3:
+            x = x.repeat(1, 3, 1, 1)
+        
+        features = self.backbone(x)
+        
+        # Process features through time head
+        f_k = self.time_head(features)
+        if f_k.dim() == 4:
+            f_k = f_k.squeeze(-1).squeeze(-1)
+        elif f_k.dim() == 3:
+            f_k = f_k.squeeze(-1)
+        return f_k
+    
+    def set_gk(self, g_k=None):
+        self.gk = g_k
+        
+    def get_gk(self, t=None):
+        if t is not None or self.gk is None:
+            return self.Pk(t)
+        else:
+            return self.gk
+    
+    def set_gk_grad(self, gk_grad=None):
+        self.gk_grad = gk_grad
+        
+    def get_gk_grad(self, t=None):
+        if t is not None or self.gk_grad is None:
+            return self.Pk.grad_function(t)
+        else:
+            return self.gk_grad
+
+    def forward(self, t, x, joint=True):
+        # Ensure input has 3 channels
+        if x.shape[1] == 1 and self.in_channels == 3:
+            x = x.repeat(1, 3, 1, 1)
+        
+        # Get backbone features
+        features = self.backbone(x)
+        
+        # Time score with decomposition
+        f_k = self.compute_fk(features)  # [B, K]
+        g_k = self.Pk(t)  # [B, K]
+        s_t = torch.sum(f_k * g_k, dim=-1, keepdim=True)  # [B, 1]
+        self.set_fk(f_k)
+        self.set_gk(g_k)
+        
+        if torch.isnan(s_t).any().item():
+            raise ValueError
+        
+        # Data score
+        if self.joint and joint:
+            t_emb = self.time_embed(t.view(-1, 1)).squeeze()
+            s_x = self.data_head(features)
+            s_x = s_x.view(x.shape[0], self.in_channels, 32, 32)
+            return s_x, s_t
+        return s_t

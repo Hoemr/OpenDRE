@@ -798,6 +798,71 @@ class ChangePointDetectionDataModule(DataModule):
         return DataLoader(self.test_dataset, batch_size=1, num_workers=0, pin_memory=True )
 
 
+# In[] OOD Detection Dataset
+OOD_IN_DIST_DATASETS = ['mnist', 'fashion_mnist', 'cifar10', 'cifar100']
+OOD_BASE_TYPES = ['local', 'general', 'universal']
+
+class OODDetectionIterDataset(IterableDataset):
+    """Iterable dataset for OOD detection with streaming (px, qx) pairs."""
+    def __init__(self, generator, batch_size=5000, batch_num=1):
+        self.generator = generator
+        self.batch_size = batch_size
+        self.batch_num = batch_num
+        
+    def __iter__(self):
+        for _ in range(self.batch_num):
+            x_in, x_ood, true_mi = self.generator.sample(batch_size=self.batch_size)
+            yield x_in, x_ood, true_mi
+
+class OutOfDistributionDetectionDataModule(IterDataModule):
+    """
+    DataModule for Out-of-Distribution (OOD) detection.
+    
+    Supports training density ratio estimators for OOD detection using:
+        - 'local': Cropped-resized in-distribution samples as synthetic OOD
+        - 'general': Different dataset as OOD (e.g., CIFAR-10 vs SVHN)
+        - 'universal': 300K random images (Outlier Exposure)
+    
+    Training returns (x_in, x_ood) pairs where:
+        - x_in: In-distribution samples
+        - x_ood: Out-of-distribution samples
+    
+    Usage:
+        python main.py --data ood_detection --ood_in_dist mnist --ood_base_type universal
+    """
+    def __init__(self, args):
+        super().__init__(args)
+        self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
+        self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
+        self.ood_noise_std = getattr(args, 'ood_noise_std', 0.1)
+        self.ood_anneal_alpha_init = getattr(args, 'ood_anneal_alpha_init', 0.0)
+        self.ood_crop_size = getattr(args, 'ood_crop_size', 12)
+        self.generator = None
+
+    def setup(self, stage=None):
+        # Set args for generator configuration
+        self.generator = data_utils.OutOfDistributionDetectionDatasetGenerator(
+            in_dist=self.ood_in_dist,
+            base_type=self.ood_base_type,
+            data_dir=self.args.data_dir,
+            args=self.args
+        )
+        
+        self.train_dataset = OODDetectionIterDataset(
+            self.generator,
+            batch_size=self.batch_size,
+            batch_num=self.batch_num
+        )
+        
+        self.val_dataset = OODDetectionIterDataset(
+            self.generator,
+            batch_size=self.test_batch_size,
+            batch_num=1
+        )
+        
+        self.test_dataset = self.val_dataset
+
+
 # In[]
 SUBTASK_DATA_MODULES = {
     "synthetic2d": Synthetic2DIterDataModule,
@@ -808,4 +873,5 @@ SUBTASK_DATA_MODULES = {
     "mi_realdata": MIRealDataModule,
     "two_sample_test": TwoSampleTestIterDataModule,
     "change_point_detection":ChangePointDetectionDataModule,
+    "ood_detection": OutOfDistributionDetectionDataModule,
 }
