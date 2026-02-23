@@ -19,6 +19,7 @@ from scipy.spatial.distance import cdist
 
 from . import layers as Layers
 from . import polynomials as Pk
+from .pl_data import DATA_SHAPES
 from utils.utils import _flip
 from utils.utils import unsqueeze, squeeze
 from utils.utils import divergence_approx, divergence_bf
@@ -258,6 +259,53 @@ class UnifiedModel(nn.Module):
         elif data_type == 'image':
             self._build_image_architecture(in_channels, hidden_channels, embed_dim, 
                                          nonlinearity, dropout, args)
+        
+        # Determine forward method based on model configuration to avoid repeated if statements
+        if model_type in ['joint_score', 'decomp_joint_score']:
+            if data_type == 'tabular':
+                self._forward_time_dependent_impl = self._forward_tabular_time_dependent
+                self._compute_s_t_impl = self._compute_s_t_tabular_decomp if model_type == 'decomp_joint_score' else self._compute_s_t_tabular_joint
+            elif data_type == 'image':
+                if backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']:
+                    self._forward_time_dependent_impl = self._forward_resnet_time_dependent
+                    self._compute_s_t_impl = self._compute_s_t_resnet_decomp if model_type == 'decomp_joint_score' else self._compute_s_t_resnet_joint
+                else:  # UNet
+                    self._forward_time_dependent_impl = self._forward_unet_time_dependent
+                    self._compute_s_t_impl = self._compute_s_t_unet_decomp if model_type == 'decomp_joint_score' else self._compute_s_t_unet_joint
+            self.forward_impl = self._forward_time_dependent_impl
+        elif model_type == 'density_ratio':
+            if data_type == 'tabular':
+                self._forward_density_ratio_impl = self._forward_density_ratio_tabular
+            elif data_type == 'image':
+                if backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']:
+                    self._forward_density_ratio_impl = self._forward_density_ratio_image_resnet
+                else:
+                    self._forward_density_ratio_impl = self._forward_density_ratio_image_unet
+            self.forward_impl = self._forward_density_ratio_impl
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
+        
+        # Determine compute_fk implementation based on data type and backbone
+        if data_type == 'tabular':
+            self.compute_fk_impl = self._compute_fk_tabular
+        elif data_type == 'image':
+            if backbone == 'unet':
+                self.compute_fk_impl = self._compute_fk_unet
+            else:  # ResNet/WideResNet
+                self.compute_fk_impl = self._compute_fk_resnet
+        
+        # Pre-determine additional flags to avoid repeated if statements in forward pass
+        self._is_decomp_joint_score = (model_type == 'decomp_joint_score')
+        self._is_joint_score = (model_type == 'joint_score')
+        self._is_time_dependent = (model_type in ['joint_score', 'decomp_joint_score'])
+        
+        # Pre-compute image dimensions for ResNet architecture (used in forward)
+        if data_type == 'image' and backbone not in ['unet']:
+            data_shape = getattr(args, 'data', None) if args else None
+            if data_shape in DATA_SHAPES:
+                self._img_channels, self._img_height, self._img_width = DATA_SHAPES[data_shape]
+            else:
+                self._img_channels, self._img_height, self._img_width = in_channels, 32, 32
         
         self._initialize_weights()
         self.nfe = 0  # Number of function evaluations
@@ -499,32 +547,51 @@ class UnifiedModel(nn.Module):
         backbone_out_dim = hidden_channels[-1]
         
         if self.model_type == 'decomp_joint_score':
-            # Time head for decomposition
-            self.time_head = nn.Sequential(
-                nn.Linear(backbone_out_dim, backbone_out_dim),
-                nn.SiLU(),
+            # Time head for decomposition - controlled by num_time_head
+            time_head_layers = []
+            for _ in range(getattr(args, 'num_time_head', 1) - 1):
+                time_head_layers.extend([
+                    nn.Linear(backbone_out_dim, backbone_out_dim),
+                    nn.SiLU()
+                ])
+            time_head_layers.extend([
                 nn.Linear(backbone_out_dim, self.K),
                 nn.AdaptiveAvgPool2d(1),
                 self._get_activation(self.time_act) if self.time_act != "identity" else nn.Identity()
-            )
+            ])
+            self.time_head = nn.Sequential(*time_head_layers)
         else:
             # Time head for regular joint score
             self.out_st = nn.Linear(backbone_out_dim, 1)
         
-        # Data head for joint method
+        # Data head for joint method - controlled by num_data_head and image dimensions
         if self.joint:
-            if self.model_type == 'decomp_joint_score':
-                self.data_head = nn.Sequential(
-                    nn.Linear(backbone_out_dim, backbone_out_dim),
-                    nn.SiLU(),
-                    nn.Linear(backbone_out_dim, in_channels * 32 * 32)
-                )
+            # Get image dimensions from DATA_SHAPES based on args.data
+            data_shape = getattr(args, 'data', None)
+            if data_shape in DATA_SHAPES:
+                img_channels, img_height, img_width = DATA_SHAPES[data_shape]
             else:
-                self.data_head = nn.Sequential(
-                    nn.Linear(backbone_out_dim, backbone_out_dim),
-                    nn.SiLU(),
-                    nn.Linear(backbone_out_dim, in_channels * 32 * 32)  # Assuming 32x32 images
-                )
+                # Default fallback to 32x32 if data not found in DATA_SHAPES
+                img_channels, img_height, img_width = in_channels, 32, 32
+            
+            if self.model_type == 'decomp_joint_score':
+                data_head_layers = []
+                for _ in range(getattr(args, 'num_data_head', 1) - 1):
+                    data_head_layers.extend([
+                        nn.Linear(backbone_out_dim, backbone_out_dim),
+                        nn.SiLU()
+                    ])
+                data_head_layers.append(nn.Linear(backbone_out_dim, img_channels * img_height * img_width))
+                self.data_head = nn.Sequential(*data_head_layers)
+            else:
+                data_head_layers = []
+                for _ in range(getattr(args, 'num_data_head', 1) - 1):
+                    data_head_layers.extend([
+                        nn.Linear(backbone_out_dim, backbone_out_dim),
+                        nn.SiLU()
+                    ])
+                data_head_layers.append(nn.Linear(backbone_out_dim, img_channels * img_height * img_width))
+                self.data_head = nn.Sequential(*data_head_layers)
     
     def _get_activation(self, nonlinearity):
         """Get activation function by name."""
@@ -568,56 +635,52 @@ class UnifiedModel(nn.Module):
     
     def set_fk(self, f_k=None):
         """Set f_k values for decomposition models."""
-        if self.model_type == 'decomp_joint_score':
-            self.fk = f_k
+        self.fk = f_k
     
     def get_fk_reg(self, x=None):
         """Get f_k values for decomposition models."""
-        if self.model_type != 'decomp_joint_score':
-            return None
-        
         if x is not None or self.fk is None:
             return self.compute_fk(x)
         else:
             return self.fk
     
+    def _compute_fk_tabular(self, x):
+        """Compute f_k features for tabular data."""
+        # For tabular data, use shared layers and time head
+        x = self.shared_layers(x)
+        return self.time_head(x)  # Shape: (..., K)
+    
+    def _compute_fk_unet(self, x):
+        """Compute f_k features for UNet-based models."""
+        # For UNet, use init conv, encoder and time head
+        x = self.init_conv(x, None)
+        for block in self.encoder:
+            x = block(x, None)
+        return self.time_head(x).squeeze(-1).squeeze(-1)  # Shape: (..., K)
+    
+    def _compute_fk_resnet(self, x):
+        """Compute f_k features for ResNet-based models."""
+        # For ResNet, use backbone and time head
+        # Ensure input has 3 channels
+        if x.shape[1] == 1 and self.in_channels == 3:
+            x = x.repeat(1, 3, 1, 1)
+        
+        features = self.backbone_net(x)
+        
+        # Process features through time head
+        f_k = self.time_head(features)
+        if f_k.dim() == 4:
+            f_k = f_k.squeeze(-1).squeeze(-1)
+        elif f_k.dim() == 3:
+            f_k = f_k.squeeze(-1)
+        return f_k
+    
     def compute_fk(self, x):
         """Compute f_k features for decomposition models."""
-        if self.model_type != 'decomp_joint_score':
-            return None
-        
-        if self.data_type == 'tabular':
-            # For tabular data, use shared layers and time head
-            x = self.shared_layers(x)
-            return self.time_head(x)  # Shape: (..., K)
-        elif self.data_type == 'image':
-            if self.backbone == 'unet':
-                # For UNet, use init conv, encoder and time head
-                x = self.init_conv(x, None)
-                for block in self.encoder:
-                    x = block(x, None)
-                return self.time_head(x).squeeze(-1).squeeze(-1)  # Shape: (..., K)
-            else:
-                # For ResNet, use backbone and time head
-                # Ensure input has 3 channels
-                if x.shape[1] == 1 and self.in_channels == 3:
-                    x = x.repeat(1, 3, 1, 1)
-                
-                features = self.backbone_net(x)
-                
-                # Process features through time head
-                f_k = self.time_head(features)
-                if f_k.dim() == 4:
-                    f_k = f_k.squeeze(-1).squeeze(-1)
-                elif f_k.dim() == 3:
-                    f_k = f_k.squeeze(-1)
-                return f_k
+        return self.compute_fk_impl(x)
     
     def compute_weighted_sum(self, x, f_k=None):
-        """Compute the weighted sum for decomposition models."""
-        if self.model_type != 'decomp_joint_score':
-            return None
-        
+        """Compute the weighted sum for decomposition models.""" 
         if f_k is None:
             f_k = self.compute_fk(x)
         weighted_sum = torch.sum(f_k * self.Pk.integrals, dim=-1, keepdim=True)
@@ -625,9 +688,6 @@ class UnifiedModel(nn.Module):
     
     def time_gradient(self, t, x, f_k=None):
         """Compute the gradient with respect to time for decomposition models."""
-        if self.model_type != 'decomp_joint_score':
-            return None
-        
         if f_k is None:
             f_k = self.compute_fk(x)
         g_k = self.Pk.grad_function(t)
@@ -643,24 +703,75 @@ class UnifiedModel(nn.Module):
         For density ratio models:
         - inputs[0]: data x
         """
-        if self.model_type in ['joint_score', 'decomp_joint_score']:
-            t, x = inputs[0], inputs[1]
-            return self._forward_time_dependent(t, x, cond, joint)
-        elif self.model_type == 'density_ratio':
-            x = inputs[0]
-            return self._forward_density_ratio(x)
-        else:
-            raise ValueError(f"Unsupported model type: {self.model_type}")
+        return self.forward_impl(*inputs, cond=cond, joint=joint)
     
     def _forward_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for time-dependent models."""
-        if self.data_type == 'tabular':
-            return self._forward_tabular_time_dependent(t, x, cond, joint)
-        elif self.data_type == 'image':
-            if self.backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']:
-                return self._forward_resnet_time_dependent(t, x, cond, joint)
-            else:  # UNet
-                return self._forward_unet_time_dependent(t, x, cond, joint)
+        return self._forward_time_dependent_impl(t, x, cond, joint)
+
+    def _compute_s_t_tabular_decomp(self, t, x, time_emb):
+        """Compute s_t for tabular decomposition models."""
+        f_k = self.time_head(x)  # Shape: (..., K)
+        g_k = self.Pk(t)  # Shape: (..., K)
+        s_t = torch.sum(f_k * g_k, dim=-1, keepdim=True)  # Shape: (..., 1)
+
+        # Clamp the values to avoid extreme values leading to NaN in gradients
+        f_k = torch.clamp(f_k, min=-1e6, max=1e6)
+        g_k = torch.sign(g_k) * torch.clamp(torch.abs(g_k), min=1e-8)
+
+        self.set_fk(f_k)
+
+        if torch.isnan(s_t).any().item():
+            print("f_k:", f_k.mean(dim=0), "\n g_k:", g_k.mean(dim=0), "\n s_t: ", s_t.mean(dim=0))
+            raise ValueError("NaN detected in time score computation")
+        return s_t
+
+    def _compute_s_t_tabular_joint(self, t, x, time_emb):
+        """Compute s_t for tabular joint-score models."""
+        s_t = x
+        for layer in self.time_head:
+            if hasattr(layer, 'forward'):
+                if hasattr(layer, 'embed_dim'):
+                    s_t = layer(s_t, time_emb=time_emb)
+                else:
+                    s_t = layer(s_t)
+            else:
+                s_t = layer(s_t)
+        return s_t
+
+    def _compute_s_t_unet_decomp(self, t, features, t_emb):
+        """Compute s_t for UNet decomposition models."""
+        f_k = self.time_head(features).squeeze(-1).squeeze(-1)  # Shape: (batch_size, K)
+        g_k = self.Pk(t)   # Shape: (..., K)
+        s_t = torch.sum(f_k * g_k, dim=-1, keepdim=True)  # Shape: (..., 1)
+        self.set_fk(f_k)
+
+        if torch.isnan(s_t).any().item():
+            raise ValueError("NaN detected in time score computation")
+        return s_t
+
+    def _compute_s_t_unet_joint(self, t, features, t_emb):
+        """Compute s_t for UNet joint-score models."""
+        return self.out_st(features.mean(dim=(2, 3))).view(-1, 1)
+
+    def _compute_s_t_resnet_decomp(self, t, features, t_emb):
+        """Compute s_t for ResNet decomposition models."""
+        f_k = self.time_head(features)
+        if f_k.dim() == 4:
+            f_k = f_k.squeeze(-1).squeeze(-1)
+        elif f_k.dim() == 3:
+            f_k = f_k.squeeze(-1)
+        g_k = self.Pk(t)   # Shape: (..., K)
+        s_t = torch.sum(f_k * g_k, dim=-1, keepdim=True)  # Shape: (..., 1)
+        self.set_fk(f_k)
+
+        if torch.isnan(s_t).any().item():
+            raise ValueError("NaN detected in time score computation")
+        return s_t
+
+    def _compute_s_t_resnet_joint(self, t, features, t_emb):
+        """Compute s_t for ResNet joint-score models."""
+        return self.out_st(features).view(-1, 1)  # [B, 1]
     
     def _forward_tabular_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for tabular time-dependent models."""
@@ -684,51 +795,15 @@ class UnifiedModel(nn.Module):
             else:
                 x = layer(x)
 
-        # Process time-related features
-        if self.model_type == 'decomp_joint_score':
-            # For decomposition models, compute f_k and g_k
-            f_k = self.time_head(x)  # Shape: (..., K)
-            g_k = self.Pk(t)  # Shape: (..., K)
-            s_t = torch.sum(f_k * g_k, dim=-1, keepdim=True)  # Shape: (..., 1)
-            
-            # Clamp the values to avoid extreme values leading to NaN in gradients
-            f_k = torch.clamp(f_k, min=-1e6, max=1e6)
-            g_k = torch.sign(g_k) * torch.clamp(torch.abs(g_k), min=1e-8)
-            
-            self.set_fk(f_k)
-            
-            if torch.isnan(s_t).any().item():
-                print("f_k:", f_k.mean(dim=0), "\n g_k:", g_k.mean(dim=0), "\n s_t: ", s_t.mean(dim=0))
-                raise ValueError("NaN detected in time score computation")
-        else:
-            # For regular joint score models
-            s_t = x
-            for layer in self.time_head:
-                if hasattr(layer, 'forward'):
-                    if hasattr(layer, 'embed_dim'):
-                        s_t = layer(s_t, time_emb=time_emb)
-                    else:
-                        s_t = layer(s_t)
-                else:
-                    s_t = layer(s_t)
+        s_t = self._compute_s_t_impl(t, x, time_emb)
         
         if self.joint and joint:
-            if self.model_type == 'decomp_joint_score':
-                # For decomposition models, process through data head
-                s_x = x
-                for layer in self.data_head:
-                    if hasattr(layer, 'embed_dim'):
-                        s_x = layer(s_x, time_emb=time_emb)
-                    else:
-                        s_x = layer(s_x)
-            else:
-                # For regular joint score models
-                s_x = x
-                for layer in self.data_head:
-                    if hasattr(layer, 'embed_dim'):
-                        s_x = layer(s_x, time_emb=time_emb)
-                    else:
-                        s_x = layer(s_x)
+            s_x = x
+            for layer in self.data_head:
+                if hasattr(layer, 'embed_dim'):
+                    s_x = layer(s_x, time_emb=time_emb)
+                else:
+                    s_x = layer(s_x)
             return s_x, s_t  
         return s_t
     
@@ -751,18 +826,7 @@ class UnifiedModel(nn.Module):
             x = block(x, t_emb)
             skips.append(x)
         
-        if self.model_type == 'decomp_joint_score':
-            # For decomposition models, use time head to get K components
-            f_k = self.time_head(x).squeeze(-1).squeeze(-1)  # Shape: (batch_size, K)
-            g_k = self.Pk(t)   # Shape: (..., K)
-            s_t = torch.sum(f_k * g_k, dim=-1, keepdim=True)  # Shape: (..., 1)
-            self.set_fk(f_k)
-            
-            if torch.isnan(s_t).any().item():
-                raise ValueError("NaN detected in time score computation")
-        else:
-            # For regular models, use linear layer to get time score
-            s_t = self.out_st(x.mean(dim=(2,3))).view(-1, 1)
+        s_t = self._compute_s_t_impl(t, x, t_emb)
         
         if self.joint and joint:
             # Decoding process (upsampling)
@@ -802,68 +866,46 @@ class UnifiedModel(nn.Module):
         
         features = self.backbone_net(x)  # [B, backbone_out_dim]
         
-        # Time score
-        if self.model_type == 'decomp_joint_score':
-            # For decomposition models, use time head to get K components
-            f_k = self.time_head(features)
-            if f_k.dim() == 4:
-                f_k = f_k.squeeze(-1).squeeze(-1)
-            elif f_k.dim() == 3:
-                f_k = f_k.squeeze(-1)
-            g_k = self.Pk(t)   # Shape: (..., K)
-            s_t = torch.sum(f_k * g_k, dim=-1, keepdim=True)  # Shape: (..., 1)
-            self.set_fk(f_k)
-            
-            if torch.isnan(s_t).any().item():
-                raise ValueError("NaN detected in time score computation")
-        else:
-            # For regular models, use linear layer to get time score
-            s_t = self.out_st(features).view(-1, 1)  # [B, 1]
+        s_t = self._compute_s_t_impl(t, features, t_emb)
         
         if self.joint and joint:
             # Data score (image reconstruction)
             s_x = self.data_head(features)
-            # Reshape to image format [B, C, H, W]
-            s_x = s_x.view(x.shape[0], self.in_channels, 32, 32)
+            # Use pre-computed image dimensions
+            s_x = s_x.view(x.shape[0], self._img_channels, self._img_height, self._img_width)
             return s_x, s_t
         return s_t
     
-    def _forward_density_ratio(self, x):
-        """Forward pass for density ratio models."""
-        if self.data_type == 'tabular':
-            # For tabular data, process through shared layers and time head
-            for layer in self.shared_layers:
-                x = layer(x)
-            
-            for layer in self.time_head:
-                x = layer(x)
-            
-            return x  # Return log density ratio
-        elif self.data_type == 'image':
-            if self.backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']:
-                # For ResNet-based models
-                # Ensure input has 3 channels
-                if x.shape[1] == 1 and self.in_channels == 3:
-                    x = x.repeat(1, 3, 1, 1)
-                
-                # Get logits from backbone
-                logits = self.backbone_net(x)  # [batch_size, num_classes]
-                
-                # Return logit as log density ratio
-                if logits.size(-1) == 1:
-                    return logits.squeeze(-1)  # [batch_size,]
-                return logits
-            else:
-                # For UNet-based models (less common for density ratio)
-                x = self.init_conv(x, None)
-                for block in self.encoder:
-                    x = block(x, None)
-                
-                # Global average pooling and final linear layer
-                x = F.adaptive_avg_pool2d(x, 1)
-                x = torch.flatten(x, 1)
-                x = self.out_st(x) if hasattr(self, 'out_st') else x
-                return x.squeeze()
+    def _forward_density_ratio_tabular(self, x, cond=None, joint=True):
+        """Forward pass for tabular density-ratio models."""
+        for layer in self.shared_layers:
+            x = layer(x)
+
+        for layer in self.time_head:
+            x = layer(x)
+
+        return x
+
+    def _forward_density_ratio_image_resnet(self, x, cond=None, joint=True):
+        """Forward pass for ResNet/WideResNet density-ratio models."""
+        if x.shape[1] == 1 and self.in_channels == 3:
+            x = x.repeat(1, 3, 1, 1)
+
+        logits = self.backbone_net(x)
+        if logits.size(-1) == 1:
+            return logits.squeeze(-1)
+        return logits
+
+    def _forward_density_ratio_image_unet(self, x, cond=None, joint=True):
+        """Forward pass for UNet density-ratio models."""
+        x = self.init_conv(x, None)
+        for block in self.encoder:
+            x = block(x, None)
+
+        x = F.adaptive_avg_pool2d(x, 1)
+        x = torch.flatten(x, 1)
+        x = self.out_st(x) if hasattr(self, 'out_st') else x
+        return x.squeeze()
 
 
 # ==================== Convenience Classes for Backward Compatibility ====================
@@ -973,7 +1015,7 @@ class ResNetDensityRatioModel(UnifiedModel):
         class DummyArgs:
             def __init__(self):
                 self.joint = False
-                
+
         super().__init__(
             model_type='density_ratio',
             data_type='image',

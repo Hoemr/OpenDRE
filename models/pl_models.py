@@ -5,6 +5,8 @@ import math
 import pickle
 import numpy as np
 from typing import Tuple, Optional
+from sklearn.metrics import roc_auc_score
+
 import pytorch_lightning as pl
 import torch
 import torch.optim as optim
@@ -1139,7 +1141,6 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         total_samples = sum(out["batch_size"] for out in self.validation_step_outputs)
         
         # Compute AUROC
-        from sklearn.metrics import roc_auc_score
         labels = torch.cat([torch.ones(len(all_in_scores)), torch.zeros(len(all_ood_scores))])
         scores = torch.cat([all_in_scores, all_ood_scores])
         
