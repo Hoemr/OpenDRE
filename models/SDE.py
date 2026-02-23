@@ -348,7 +348,6 @@ class InterpXt(SDE):
         self.data_ndim = data_ndim # 2 for toy and 4 for image
         
         self.GRBC_epsilon = args.GRBC_epsilon
-        self.jitter = args.jitter
         self.bridge = args.bridge
         self.combination_type = args.combination_type  # e.g., "linear", "VPSDE", "cosine"
         self.gamma_t = args.gamma_t  # in fact is gamma^2

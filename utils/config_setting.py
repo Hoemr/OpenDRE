@@ -73,27 +73,21 @@ def get_common_args(parser):
     parser.add_argument("--gpp", action='store_true', default=False, help="Gaussian process prior / Gaussian Mixture / Kumaraswamy Mixture")
     parser.add_argument('--grid_size', type=int, default=200)
     parser.add_argument('--K_gmm', type=int, default=5, help="num of components of GMM or KMM")
-    parser.add_argument('--inducing_size', type=int, default=50, help="num of inducing points")
     parser.add_argument('--constraint_type', type=str, default="spherical", choices=["spherical", "affine"])  
-    parser.add_argument('--jitter', type=float, default=1e-4, help="jitter for positive cholesky decomposition")
-    
+  
     # decomposition
     parser.add_argument("--decomp", action='store_true', default=False)
     parser.add_argument('--K_decomp', type=int, default=400)
     parser.add_argument("--polynomials", type=str, default="gaussianrbf", choices=Pk.POLYNOMIALS)
     parser.add_argument("--noise_type", type=str, default="zero")
-    parser.add_argument("--pre_grad", type=eval, default=True, choices=[True, False])
     parser.add_argument('--clip_tau', type=float, default=1.)
     parser.add_argument("--auxiliary_loss", action='store_false', default=True)
     parser.add_argument("--bregman_type", type=str, default="logistic")
+    parser.add_argument("--shape_type", type=str, default="uniform")
     
     # Engery modeling
     parser.add_argument("--energy", action='store_true', default=False)
-    
-    # Error control
-    parser.add_argument("--shape_type", type=str, default="uniform")
-    parser.add_argument("--sobolev", action='store_true', default=False)
-    
+
     # Secant Alignment Identity
     parser.add_argument("--SAI", action='store_true', default=False)
     parser.add_argument("--t_mode", type=str, default="uniform", choices=["uniform", "IS", "lognorm", "AIS"])
@@ -170,8 +164,7 @@ def get_fdiv_args(parser):
     parser.add_argument('--ood_anneal_alpha_init', type=float, default=0.142857, help='Initial annealing alpha for mixup')
     parser.add_argument('--ood_anneal_gamma', type=float, default=1.0, help='Annealing gamma for alpha')
     parser.add_argument('--ood_crop_size', type=int, default=12, help='Crop size for local OOD detection')
-    parser.add_argument("--ood_data_dir", type=str, default="../data")
-    
+ 
     # Image backbone (ResNet or WideResNet for all image-related tasks)
     parser.add_argument('--image_backbone', type=str, default='resnet18', choices=['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'], help='Backbone network for image-based tasks (OOD detection, real images, etc.)')
     parser.add_argument('--image_dropout', type=float, default=0.3, help='Dropout rate for WideResNet backbone')
@@ -318,6 +311,7 @@ def parse_args():
             # python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --ood_base_type universal --epochs 1000 --batch_size 512 --lr 0.01
             # Set OOD detection specific args
             args = set_image_args(args)
+            args.data = args.ood_in_dist
             # args.dims = "128-256-512"  # Same as real_image for CNN
             args.epochs = 1000
             args.batch_size = 512
@@ -366,11 +360,9 @@ def get_save_path(args):
             key_args.extend(["bridge", str(args.gamma_t)])
     
         if args.decomp:
-            pre_grad = "pg" if args.pre_grad else None
             auxiliary_loss = "na" if not args.auxiliary_loss else "aux"
             shape_type = None if args.shape_type == "uniform" else args.shape_type
-            sobolev = "sobo" if args.sobolev else None
-            key_args.extend(["dc", shape_type, sobolev, args.polynomials, args.noise_type, "K"+str(args.K_decomp), pre_grad, auxiliary_loss])
+            key_args.extend(["dc", shape_type, args.polynomials, args.noise_type, "K"+str(args.K_decomp), auxiliary_loss])
         elif args.SAI:
             key_args.extend(["sai", args.t_mode, f"ratio{args.aligned_ratio}"])
     

@@ -568,7 +568,7 @@ class TimeSampler(nn.Module):
         return l, t
 
 class TestModel(nn.Module):
-    def __init__(self, beta_min=0.1, beta_max=20, eps=1e-5, jitter=1e-4, 
+    def __init__(self, beta_min=0.1, beta_max=20, eps=1e-5, 
                  combination_type="VPSDE", input_dim=1, joint=True, device="cpu", bridge=False):
         super().__init__()
         self.beta_0 = beta_min
@@ -577,7 +577,6 @@ class TestModel(nn.Module):
         self.bridge = bridge
         self.gamma_t = 1.
         
-        self.jitter = jitter
         self.eps = eps
         self.combination_type = combination_type  # e.g., "linear", "VPSDE", "cosine"
         input_shape = (input_dim,)
@@ -589,12 +588,6 @@ class TestModel(nn.Module):
             
         self.gpp = True  # Gaussian Process Prior
         if combination_type == "gpp":
-            # self.gaussian_process = GMMBayesianTrajectory(
-            #     n_components=10, 
-            #     constraint_type="spherical", 
-            #     eps=eps, 
-            #     grid_size=200
-            # ).to(device)
             
             self.gaussian_process = KMMBayesianTrajectory(
                 n_components=10, 

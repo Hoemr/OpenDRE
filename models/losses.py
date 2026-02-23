@@ -504,22 +504,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
             #         # joint_expectation = logr1.mean(dim=0)   
             #         # marginal_expectation = torch.log(torch.mean(torch.exp(logr0), dim=0))         
             #         # mine_loss = - (joint_expectation - marginal_expectation)
-            #         # loss += weight * mine_loss
-
-            # # # soft clip of output
-            # fk_list = [fk_xt,]  #  fk_x0, fk_x1
-            # clip_loss = torch.mean(torch.stack([self.soft_clip_loss(fk, self.clip_tau) for fk in fk_list]), dim=0).view((batch_size, -1))
-            # loss += weight * clip_loss
-            
-            # # l1 and l2 reg (elastic reg) on the output of NN
-            # l12_loss = torch.mean(torch.stack([torch.mean(fk.abs() + fk.pow(2), dim=1) for fk in fk_list]), dim=0).view((batch_size, -1))
-            # loss += weight * l12_loss
-            
-            # # soft clip of output
-            # fk_list = [fk_xt,]  #  fk_x0, fk_x1
-            # clip_loss = torch.mean(torch.stack([self.soft_clip_loss(fk, self.clip_tau) for fk in fk_list]), dim=0).view((batch_size, -1))
-            # reg_loss += clip_loss
-            
+            #         # loss += weight * mine_loss 
             
             # # loss = loss + reg_loss #/ self.K 
             
