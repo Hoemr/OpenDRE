@@ -245,6 +245,7 @@ def train_fdiv_estimation(args):
     max_epochs = args.epochs
     precision = 32
     accumulate_grad_batches = 1
+    end_test = False
     
     # Task-specific hyperparameters and callbacks
     if args.subtask == "distribution_shift":
@@ -267,6 +268,7 @@ def train_fdiv_estimation(args):
 
     elif args.subtask == "ood_detection":
         callbacks = [txt_logger_callback]
+        end_test = True
     else:
         raise ValueError(f"Invalid subtask {args.subtask}")
 
@@ -296,6 +298,17 @@ def train_fdiv_estimation(args):
     # Train the model
     trainer.fit(pl_model, datamodule=datamodule)
     trainer.save_checkpoint(os.path.join(checkpoint_dir, "final_model.ckpt"))
+
+    if end_test:
+        if torch.cuda.is_available() and torch.distributed.is_initialized():
+            torch.distributed.barrier()
+        
+        # Evaluate last saved model
+        trainer.test(pl_model, datamodule=datamodule)
+        
+        # Evaluate best model based on validation metric
+        best_model = model_module_name.load_from_checkpoint(checkpoint_callback.best_model_path, strict=False)
+        trainer.test(best_model, datamodule=datamodule)
 
 
 if __name__ == "__main__":

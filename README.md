@@ -555,13 +555,160 @@ class CustomDensityRatioTrainStepFn:
         return {"loss": loss, "nll": nll}
 ```
 
-## Architecture
+## Model Architecture
+
+This section describes the neural network architectures available in `base_models.py` and how to use them.
+
+### Overview
+
+The framework uses a unified model architecture that supports both tabular and image data with different backbone networks. The `UnifiedModel` class provides a flexible foundation that handles various model types through configurable parameters.
+
+### Model Types
+
+| Model Type | Description | Use Case |
+|------------|-------------|----------|
+| `joint_score` | Joint score estimation s(x,t) | Time-dependent score matching |
+| `decomp_joint_score` | Decomposed joint score with polynomial basis | Scalable score decomposition |
+| `density_ratio` | Direct density ratio estimation r(x) | Density ratio estimation |
+
+### Data Types
+
+| Data Type | Backbone | Description |
+|-----------|----------|-------------|
+| `tabular` | MLP | Multi-layer perceptron for tabular data |
+| `image` | UNet, ResNet, WideResNet | Various architectures for image data |
+
+### Available Model Classes
+
+#### Tabular Data Models
+
+```python
+from models.base_models import JointScoreModel, NeuralDensityRatioModel
+
+# For time-dependent score estimation (joint score)
+model = JointScoreModel(
+    input_dim=10,          # Input dimension
+    hidden_dims=[128, 128, 128],  # Hidden layer dimensions
+    embed_dim=256,         # Time embedding dimension
+    nonlinearity="leakyrelu",
+    args=args              # Configuration args
+)
+
+# For direct density ratio estimation
+model = NeuralDensityRatioModel(
+    input_dim=10,
+    hidden_dims=[128, 128, 128],
+    nonlinearity="leakyrelu",
+    args=args
+)
+```
+
+#### Image Data Models
+
+```python
+from models.base_models import (
+    ImageJointScoreModel,
+    ImageDecompJointScoreModel,
+    ImageJointScoreModelResNet,
+    ImageDecompJointScoreModelResNet,
+    ResNetDensityRatioModel
+)
+
+# UNet-based models
+model = ImageJointScoreModel(
+    args=args,
+    in_channels=3,
+    hidden_channels=[32, 64, 128, 256],
+    embed_dim=128
+)
+
+# UNet with score decomposition
+model = ImageDecompJointScoreModel(
+    args=args,
+    in_channels=3,
+    hidden_channels=[32, 64, 128, 256],
+    embed_dim=128,
+    K=300,  # Number of polynomial components
+    polynomials="gaussrbf"
+)
+
+# ResNet-based models (recommended for CIFAR-10/100)
+model = ImageJointScoreModelResNet(
+    args=args,
+    in_channels=3,
+    hidden_channels=[64, 128, 256, 512],
+    embed_dim=128,
+    backbone='resnet18',  # or 'resnet34', 'resnet50', 'wideresnet28_10'
+    dropout=0.3
+)
+
+# ResNet with score decomposition
+model = ImageDecompJointScoreModelResNet(
+    args=args,
+    in_channels=3,
+    hidden_channels=[64, 128, 256, 512],
+    embed_dim=128,
+    K=300,
+    backbone='resnet18',
+    dropout=0.3
+)
+
+# Density ratio estimation with ResNet (for OOD detection)
+model = ResNetDensityRatioModel(
+    in_channels=3,
+    num_classes=1,
+    backbone='resnet18',  # or 'wideresnet28_10' for CIFAR
+    dropout=0.3
+)
+```
+
+### UnifiedModel API
+
+For advanced usage, you can directly use the `UnifiedModel` class:
+
+```python
+from models.base_models import UnifiedModel
+
+model = UnifiedModel(
+    model_type='joint_score',      # 'joint_score', 'decomp_joint_score', 'density_ratio'
+    data_type='image',             # 'tabular' or 'image'
+    backbone='resnet18',            # 'mlp', 'unet', 'resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'
+    in_channels=3,
+    hidden_channels=[64, 128, 256, 512],
+    embed_dim=128,
+    K=300,                         # For decomposition models
+    nonlinearity="leakyrelu",
+    polynomials="gaussrbf",        # For decomposition models
+    args=args,
+    dropout=0.3
+)
+```
+
+### Backward Compatibility
+
+All original model classes are preserved as convenience wrappers around `UnifiedModel`. Existing code will continue to work without any changes:
+
+```python
+# This still works exactly as before
+model = JointScoreModel(input_dim=10, hidden_dims=[128, 128], args=args)
+output = model(t, x)  # Returns (s_x, s_t) for joint=True
+```
+
+### Configuration Options
+
+#### Activation Functions
+Available options: `tanh`, `relu`, `leakyrelu`, `gelu`, `silu`, `elu`, `selu`, `prelu`, `swish`, `dyt`, `truncleakyrelu`, `truncgelu`, `truncelu`
+
+#### Polynomial Types (for decomposition)
+Available options: `gaussianrbf`, `imq`, `linear`, `polynomial`, `hermite`, `legendre`
+
+### Architecture
 
 ```
 OS_DRE/
 ├── main.py                    # Unified entry point
 ├── models/
-│   ├── base_models.py         # Core neural network architectures
+│   ├── base_models.py         # Core neural network architectures (UnifiedModel + wrappers)
 │   ├── SDE.py                 # SDE/ODE solvers (VPSDE, subVPSDE, Bridge)
 │   ├── estimators.py          # Likelihood & density ratio estimators
 │   ├── losses.py              # Training loss functions
@@ -578,6 +725,7 @@ OS_DRE/
 │   └── logger.py              # Logging utilities
 └── results/                   # Experiment outputs
 ```
+
 
 ## Citation
 
