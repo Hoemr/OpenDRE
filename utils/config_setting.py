@@ -318,10 +318,9 @@ def parse_args():
             # python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --ood_base_type universal --epochs 1000 --batch_size 512 --lr 0.01
             # Set OOD detection specific args
             args = set_image_args(args)
-            args.dims = "128-256-512"  # Same as real_image for CNN
+            # args.dims = "128-256-512"  # Same as real_image for CNN
             args.epochs = 1000
             args.batch_size = 512
-            args.batch_num = 100
             args.eval_freq = 1
             args.reload_interval = args.epochs
             
