@@ -317,14 +317,6 @@ def parse_args():
             args.batch_size = 512
             args.eval_freq = 1
             args.reload_interval = args.epochs
-            
-            # OOD detection uses neural method (density ratio estimation)
-            # Set sub_method to neural and subsu_method to logistic (works well with ResNet)
-            if args.sub_method not in ["neural"]:
-                args.sub_method = "neural"
-            # Set default subsub_method for neural method
-            if args.subsub_method in SUBSUB_METHODS.get("score", []):
-                args.subsub_method = "logistic"
     
     return args
 

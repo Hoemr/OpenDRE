@@ -973,7 +973,7 @@ class ResNetDensityRatioModel(UnifiedModel):
         class DummyArgs:
             def __init__(self):
                 self.joint = False
-        
+                
         super().__init__(
             model_type='density_ratio',
             data_type='image',
@@ -984,8 +984,7 @@ class ResNetDensityRatioModel(UnifiedModel):
             args=DummyArgs(),
             dropout=dropout
         )
-
-
+    
 class FusedConvBlock(nn.Module):
     """Three-in-one module with two Convolution layers, GroupNorm, and SiLU activation."""
     def __init__(self, in_ch, out_ch, embed_dim=None, stride=1, is_transpose=False, num_groups=8):

@@ -711,7 +711,9 @@ class InterpXt(SDE):
         return torch.randn(*shape)
 
     def prior_logp(self, z):
-        N = z[0].numel()
+        # Compute the dimension per sample (N = product of all dimensions except batch)
+        N = z.numel() // z.size(0)
+        # Compute squared sum for each sample in the batch
         squared_sum = torch.sum(z ** 2, dim=tuple(range(1, z.dim())))
         return -0.5 * N * torch.log(2 * torch.tensor(torch.pi, device=z.device, dtype=z.dtype)) - 0.5 * squared_sum
 
