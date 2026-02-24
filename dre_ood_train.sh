@@ -2,6 +2,7 @@
 # OS_DRE OOD Detection Experiments - Parallel Run Script
 # Supports configurable DRE methods and in-distribution datasets
 # Automatically iterates over all combinations of DRE methods, in-dist datasets, and base types
+# RUN: nohup bash dre_ood_train.sh > /dev/null 2>&1 &
 
 # Configuration
 EPOCHS=500
