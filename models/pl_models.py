@@ -53,9 +53,13 @@ class DensityEstimationModel(pl.LightningModule):
         # for sampling
         self.data_type = args.data
         self.normalize_const=SPECS[self.data_type] if self.data_type in SPECS else 1.
+
+    def _build_sde(self, args):
+        """Factory hook for constructing SDE; subclasses can override."""
+        return ToyInterpXt(args=args)
         
     def set_basic_functions(self, args):
-        self.sde = ToyInterpXt(args=args)
+        self.sde = self._build_sde(args)
         self.likelihood_fn = self.get_density_fn()
         self.density_ratio_fn = self.get_dr_fn()
         self.model = self.build_model()
@@ -275,9 +279,13 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
 
         self.data_type = args.data
         self.data_shape = DATA_SHAPES[self.data_type]
+
+    def _build_sde(self, args):
+        """Factory hook for constructing SDE; subclasses can override."""
+        return ImageInterpXt(args=args)
         
     def set_basic_functions(self, args):
-        self.sde = ImageInterpXt(args=args)
+        self.sde = self._build_sde(args)
         self.likelihood_fn = self.get_density_fn()
         self.density_ratio_fn = self.get_dr_fn()
         self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.sde)
@@ -366,7 +374,9 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
                                         in_channels=in_channels,
                                         hidden_channels=hidden_channels,
                                         embed_dim=self.args.embed_dim,
-                                        nonlinearity=self.args.nonlinearity)    
+                                        nonlinearity=self.args.nonlinearity,
+                                        backbone=image_backbone,
+                                        dropout=image_dropout)    
     
     def get_bpd_by_nll(self, nll, x=None, log_det_J=None):
         if x is not None:
@@ -541,6 +551,10 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.nfe_db = []
         self.epoch_db = []
         self.validation_step_outputs = []
+
+    def _build_sde(self, args):
+        """Factory hook for constructing SDE; subclasses can override."""
+        return ToyInterpXt(args=args)
         
     def set_prepare_batch(self):
         """Prepare batch data for MI estimation by creating joint and marginal samples."""
@@ -574,7 +588,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.prepare_batch = prepare_batch
     
     def set_basic_functions(self, args):
-        self.sde = ToyInterpXt(args=args)
+        self.sde = self._build_sde(args)
         self.density_ratio_fn = self.get_dr_fn()
         self.model = self.build_model()
         self.train_epoch_end_step_fn = lambda : None
@@ -629,7 +643,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     dropout=image_dropout
                 )
             else:
-                return base_models.ImageJointScoreModelResNet(
+                return base_models.ImageJointScoreModel(
                     args=self.args,
                     in_channels=in_channels,
                     hidden_channels=hidden_channels,
@@ -689,7 +703,8 @@ class DensityRatioEstimationModel(pl.LightningModule):
     def build_model(self):
         """Constructs the neural network based on task type and settings."""
         # Check if we should use image backbone (ResNet/WideResNet)
-        if self._get_image_backbone():
+        if self.args.data in DATA_SHAPES.keys():
+        # if self._get_image_backbone():
             return self._build_model_with_image_backbone()
         else:
             return self._build_default_model()
@@ -849,9 +864,12 @@ class MIRealDataModel(DensityRatioEstimationModel):
     def __init__(self, args, save_path, datamodule):
         super().__init__(args, save_path, datamodule)
         self.save_hyperparameters()
+
+    def _build_sde(self, args):
+        self.sde = ImageInterpXt(args=args)
     
     def set_basic_functions(self, args):
-        self.sde = ImageInterpXt(args=args)
+        self.sde = self._build_sde(args)
         self.density_ratio_fn = self.get_dr_fn()
         self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.sde)
         self.data_type = args.data  # 'image', 'text', 'mixture'
@@ -898,7 +916,9 @@ class MIRealDataModel(DensityRatioEstimationModel):
                 in_channels=in_channels,
                 hidden_channels=hidden_channels,
                 embed_dim=self.args.embed_dim,
-                nonlinearity=self.args.nonlinearity
+                nonlinearity=self.args.nonlinearity,
+                backbone=image_backbone,
+                dropout=image_dropout
             )
 
 class TwoSampleTestModel(DensityRatioEstimationModel):
@@ -1067,6 +1087,10 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         
         # OOD metrics storage
         self.ood_metrics_db = []
+
+    def _build_sde(self, args):
+        """Use image interpolation SDE for CPD while reusing base setup logic."""
+        return ImageInterpXt(args=args)
     
     def training_step(self, batch, batch_idx):
         # For OOD detection: px=x_in (in-dist), qx=x_ood (OOD)

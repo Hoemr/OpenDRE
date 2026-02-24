@@ -537,10 +537,14 @@ class UnifiedModel(nn.Module):
     def _build_resnet_architecture(self, in_channels, hidden_channels, dropout, args):
         """Build ResNet/WideResNet architecture."""
         # Build ResNet/WideResNet backbone
+        if self.model_type in ["decomp_joint_score", "joint_score"]:
+            out_dim = hidden_channels[-1]
+        else:
+            out_dim = 1
         if self.backbone == 'wideresnet28_10':
-            self.backbone_net = Layers.WideResNet2810(out_dim=hidden_channels[-1], dropRate=dropout)
+            self.backbone_net = Layers.WideResNet2810(out_dim=out_dim, dropRate=dropout)
         elif self.backbone in ['resnet18', 'resnet34', 'resnet50']:
-            self.backbone_net = getattr(Layers, f'ResNet{self.backbone.replace("resnet", "")}')(out_dim=hidden_channels[-1])
+            self.backbone_net = getattr(Layers, f'ResNet{self.backbone.replace("resnet", "")}')(out_dim=out_dim)
         else:
             raise ValueError(f"Unsupported backbone: {self.backbone}")
         
@@ -639,6 +643,9 @@ class UnifiedModel(nn.Module):
     
     def get_fk_reg(self, x=None):
         """Get f_k values for decomposition models."""
+        if not hasattr(self, 'fk'):
+            return None
+
         if x is not None or self.fk is None:
             return self.compute_fk(x)
         else:
@@ -946,16 +953,17 @@ class NeuralDensityRatioModel(UnifiedModel):
 
 # Image models
 class ImageJointScoreModel(UnifiedModel):
-    def __init__(self, args, in_channels, hidden_channels, embed_dim=128, nonlinearity="leakyrelu"):
+    def __init__(self, args, in_channels, hidden_channels, embed_dim=128, nonlinearity="leakyrelu", backbone='unet', dropout=0.0):
         super().__init__(
             model_type='joint_score',
             data_type='image',
-            backbone='unet',
+            backbone=backbone,
             in_channels=in_channels,
             hidden_channels=hidden_channels,
             embed_dim=embed_dim,
             nonlinearity=nonlinearity,
-            args=args
+            args=args,
+            dropout=dropout
         )
 
 class ImageDecompJointScoreModel(UnifiedModel):

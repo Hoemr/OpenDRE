@@ -305,11 +305,6 @@ def train_fdiv_estimation(args):
         
         # Evaluate last saved model
         trainer.test(pl_model, datamodule=datamodule)
-        
-        # Evaluate best model based on validation metric
-        best_model = model_module_name.load_from_checkpoint(checkpoint_callback.best_model_path, strict=False)
-        trainer.test(best_model, datamodule=datamodule)
-
 
 if __name__ == "__main__":
     args = parse_args()

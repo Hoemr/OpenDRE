@@ -166,7 +166,7 @@ def get_fdiv_args(parser):
     parser.add_argument('--ood_crop_size', type=int, default=12, help='Crop size for local OOD detection')
  
     # Image backbone (ResNet or WideResNet for all image-related tasks)
-    parser.add_argument('--image_backbone', type=str, default='resnet18', choices=['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'], help='Backbone network for image-based tasks (OOD detection, real images, etc.)')
+    parser.add_argument('--image_backbone', type=str, default='unet', choices=['unet', 'resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'], help='Backbone network for image-based tasks (OOD detection, real images, etc.)')
     parser.add_argument('--image_dropout', type=float, default=0.3, help='Dropout rate for WideResNet backbone')
     return parser
 
@@ -205,6 +205,9 @@ def parse_args():
     # MinPV
     args.combination_type = "gpp" if args.gpp else args.combination_type
     args.gpp = True if args.combination_type == "gpp" else args.gpp
+
+    if args.subsub_method == "d3re":
+        args.bridge = True
     
     # ISA
     args.IA = True if args.aligned_ratio == 0.15 else args.IA
