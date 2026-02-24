@@ -14,6 +14,7 @@ from torchvision.utils import save_image
 import torchvision.utils as vutils
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 from models.SDE import ToyInterpXt, ImageInterpXt
 import models.base_models as base_models
@@ -1087,6 +1088,10 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         
         # OOD metrics storage
         self.ood_metrics_db = []
+        
+        # Initialize test_step_outputs
+        # self.validation_step_outputs = []
+        self.test_step_outputs = []
 
     def _build_sde(self, args):
         """Use image interpolation SDE for CPD while reusing base setup logic."""
@@ -1138,83 +1143,122 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         return ood_scores
     
     def validation_step(self, batch, batch_idx):
-        px, qx, _ = self.prepare_batch(batch)
+        return {}
+        # px, qx, _ = self.prepare_batch(batch)
         
-        # Compute OOD scores for both in-dist and OOD samples
-        in_scores = self.compute_ood_scores(px)
-        ood_scores = self.compute_ood_scores(qx)
+        # # Store outputs for epoch end computation
+        # step_output = {
+        #     "in_dist_batch": px,
+        #     "ood_batch": qx,
+        #     "batch_size": px.shape[0],
+        # }
+        # self.validation_step_outputs.append(step_output)
         
-        # Store outputs for epoch end computation
-        step_output = {
-            "in_scores": in_scores,
-            "ood_scores": ood_scores,
-            "batch_size": px.shape[0],
-        }
-        self.validation_step_outputs.append(step_output)
-        
-        return step_output
+        # return step_output
     
     def on_validation_epoch_end(self):
-        # Compute aggregated OOD metrics at epoch end
-        if len(self.validation_step_outputs) == 0:
-            self.validation_step_outputs.clear()
-            return
+        # Get ID test set and all OOD evaluation datasets
+        id_dataset = self.datamodule.val_dataset.in_dist_dataset
+        ood_datasets = self.datamodule.get_eval_ood_datasets(stage='val')
+        from .pl_data import OOD_EVAL_CONFIG
+        ood_names = list(OOD_EVAL_CONFIG[self.ood_in_dist]['ood_datasets'])
+        
+        # Compute ID scores (only once)
+        batch_size = getattr(self.args, 'test_batch_size', self.args.batch_size)
+        id_loader = DataLoader(id_dataset, batch_size=batch_size, shuffle=False)
+        id_scores = self._compute_scores_for_loader(id_loader)
+        
+        all_aurocs = []
+        # For each OOD dataset, compute AUROC separately
+        for ood_name, ood_ds in zip(ood_names, ood_datasets):
+            ood_loader = DataLoader(ood_ds, batch_size=batch_size, shuffle=False)
+            ood_scores = self._compute_scores_for_loader(ood_loader)
             
-        all_in_scores = torch.cat([out["in_scores"] for out in self.validation_step_outputs])
-        all_ood_scores = torch.cat([out["ood_scores"] for out in self.validation_step_outputs])
-        total_samples = sum(out["batch_size"] for out in self.validation_step_outputs)
+            # Compute AUROC: ID=1, OOD=0
+            labels = np.concatenate([np.ones(len(id_scores)), np.zeros(len(ood_scores))])
+            scores = np.concatenate([id_scores, ood_scores])
+            try:
+                auroc = roc_auc_score(labels, scores)
+                # Log separately for each OOD dataset
+                self.log(f"val_auroc_{ood_name}", auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                all_aurocs.append(auroc)
+            except:
+                # If AUROC calculation fails, log NaN
+                self.log(f"val_auroc_{ood_name}", float('nan'), on_step=False, on_epoch=True, prog_bar=True, logger=True)
         
-        # Compute AUROC
-        labels = torch.cat([torch.ones(len(all_in_scores)), torch.zeros(len(all_ood_scores))])
-        scores = torch.cat([all_in_scores, all_ood_scores])
+        # Log average AUROC
+        if all_aurocs:
+            mean_auroc = np.mean(all_aurocs)
+            self.log("val_auroc_mean", mean_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         
-        try:
-            auroc = roc_auc_score(labels.cpu().numpy(), scores.cpu().numpy())
-            self.log("val_auroc", auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        except:
-            pass
-        
-        # Log epoch-level metrics
-        self.log("val_in_score_mean", all_in_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log("val_ood_score_mean", all_ood_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log("val_score_gap", all_in_scores.mean() - all_ood_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        
-        # Store for later analysis
-        self.ood_metrics_db.append({
-            "epoch": self.current_epoch,
-            "auroc": auroc if 'auroc' in dir() else 0.0,
-            "in_score_mean": all_in_scores.mean().item(),
-            "ood_score_mean": all_ood_scores.mean().item(),
-        })
-        
-        # Clear outputs
-        self.validation_step_outputs.clear()
+        # # Clear outputs
+        # self.validation_step_outputs.clear()
     
     def test_step(self, batch, batch_idx):
-        px, qx, _ = self.prepare_batch(batch)
+        return {}
+        # px, qx, _ = self.prepare_batch(batch)
         
-        # Compute OOD scores
-        in_scores = self.compute_ood_scores(px)
-        ood_scores = self.compute_ood_scores(qx)
+        # # Store outputs for epoch end computation
+        # step_output = {
+        #     "in_dist_batch": px,
+        #     "ood_batch": qx,
+        #     "batch_size": px.shape[0],
+        # }
+        # self.test_step_outputs.append(step_output)
         
-        # Compute AUROC for OOD detection
-        # Labels: 1 for in-distribution, 0 for OOD
-        labels = torch.cat([torch.ones(len(in_scores)), torch.zeros(len(ood_scores))])
-        scores = torch.cat([in_scores, ood_scores])
+        # return step_output
+    
+    def on_test_epoch_end(self):
+        # Get ID test set and all OOD evaluation datasets
+        id_dataset = self.datamodule.test_dataset.in_dist_dataset
+        ood_datasets = self.datamodule.get_eval_ood_datasets(stage='test')
+        from .pl_data import OOD_EVAL_CONFIG
+        ood_names = list(OOD_EVAL_CONFIG[self.ood_in_dist]['ood_datasets'])
         
-        # Calculate AUROC
-        from sklearn.metrics import roc_auc_score
-        try:
-            auroc = roc_auc_score(labels.cpu().numpy(), scores.cpu().numpy())
-            self.log("test_auroc", auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        except:
-            pass
+        # Compute ID scores (only once)
+        id_loader = DataLoader(id_dataset, batch_size=self.args.test_batch_size, shuffle=False)
+        id_scores = self._compute_scores_for_loader(id_loader)
         
-        # Log additional metrics
-        self.log("test_in_score_mean", in_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log("test_ood_score_mean", ood_scores.mean(), on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        all_aurocs = []
+        # For each OOD dataset, compute AUROC separately
+        for ood_name, ood_ds in zip(ood_names, ood_datasets):
+            ood_loader = DataLoader(ood_ds, batch_size=self.args.test_batch_size, shuffle=False)
+            ood_scores = self._compute_scores_for_loader(ood_loader)
+            
+            # Compute AUROC: ID=1, OOD=0
+            labels = np.concatenate([np.ones(len(id_scores)), np.zeros(len(ood_scores))])
+            scores = np.concatenate([id_scores, ood_scores])
+            try:
+                auroc = roc_auc_score(labels, scores)
+                # Log separately for each OOD dataset
+                self.log(f"test_auroc_{ood_name}", auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                all_aurocs.append(auroc)
+            except:
+                # If AUROC calculation fails, log NaN
+                self.log(f"test_auroc_{ood_name}", float('nan'), on_step=False, on_epoch=True, prog_bar=True, logger=True)
         
-        return {"in_scores": in_scores, "ood_scores": ood_scores, "auroc": auroc if 'auroc' in dir() else 0.0}
+        # Log average AUROC
+        if all_aurocs:
+            mean_auroc = np.mean(all_aurocs)
+            self.log("test_auroc_mean", mean_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        
+        # # Clear outputs
+        # self.test_step_outputs.clear()
+    
+    def _compute_scores_for_loader(self, loader):
+        """Compute OOD scores for all samples in a loader."""
+        self.model.eval()
+        all_scores = []
+        with torch.no_grad():
+            for batch in loader:
+                if isinstance(batch, (list, tuple)):
+                    x = batch[0]  # Could be (x, label) format
+                else:
+                    x = batch
+                x = x.to(self.device)
+                scores = self.compute_ood_scores(x)
+                all_scores.append(scores.cpu().numpy())
+        return np.concatenate(all_scores)
 
 
 # In[]

@@ -4,7 +4,7 @@
 # Automatically iterates over all combinations of DRE methods, in-dist datasets, and base types
 
 # Configuration
-EPOCHS=1000
+EPOCHS=500
 BATCH_SIZE=512
 LR=0.01
 NOISE_STD=0.1
@@ -15,7 +15,8 @@ CHECK_INTERVAL=20  # Check for available GPU every 20 seconds
 LAUNCH_WAIT=30  # Wait 30 seconds after launching before checking for next GPU
 
 # Optional GPU list (GPUs 0-9)
-gpus=(2 3 4 5 6 7 8 9)
+# gpus=(2 3 4 5 6 7 8 9)
+gpus=(8 9)
 
 # Neural DRE methods to run (can be multiple, space-separated)
 # Options: logistic, nce, infonce, rkl, hellinger, kl, gamma, ew, pw, kulsif
@@ -29,7 +30,8 @@ SCORE_METHODS="${5:-dre_infty d3re}"
 
 # In-distribution datasets to run
 # Options: mnist, fashion_mnist, cifar10, cifar100
-IN_DIST_DATASETS="${2:-mnist fashion_mnist}"
+# IN_DIST_DATASETS="${2:-mnist fashion_mnist}"
+IN_DIST_DATASETS="${2:-fashion_mnist}"
 # Example: IN_DIST_DATASETS="mnist fashion_mnist cifar10"
 
 # Base types to run (local, general, universal)

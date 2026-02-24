@@ -177,12 +177,12 @@ def set_image_args(args):
     args.layer_type = "conv"    # useless now
     args.dims = "128-256-512"  # 128-256-512   or 64-128-256
     args.grad_clip = 10.
-    if args.data in ["mnist", "image"]:
+    if args.data in ["mnist", "image", "fashion_mnist"]:
+        args.batch_size = 1024
+        args.test_batch_size = 1024
+    else:
         args.batch_size = 512
         args.test_batch_size = 512
-    else:
-        args.batch_size = 128
-        args.test_batch_size = 128
     return args
 
 def parse_args():
@@ -316,9 +316,9 @@ def parse_args():
             args = set_image_args(args)
             args.data = args.ood_in_dist
             # args.dims = "128-256-512"  # Same as real_image for CNN
-            args.epochs = 1000
-            args.batch_size = 512
-            args.eval_freq = 1
+            args.epochs = 500
+            # args.batch_size = 512
+            args.eval_freq = 10
             args.reload_interval = args.epochs
     
     return args

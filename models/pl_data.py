@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import numpy as np
+import random
 from functools import partial
 from abc import ABC, abstractmethod
 
@@ -695,6 +696,44 @@ class ChangePointDetectionDataModule(DataModule):
 OOD_IN_DIST_DATASETS = ['mnist', 'fashion_mnist', 'cifar10', 'cifar100']
 OOD_BASE_TYPES = ['local', 'general', 'universal']
 
+# Define standard OOD benchmark datasets for evaluation
+OOD_EVAL_CONFIG = {
+    'mnist': {'ood_datasets': ['fashion_mnist', 'emnist']},
+    'fashion_mnist': {'ood_datasets': ['mnist', 'emnist']},
+    'cifar10': {'ood_datasets': ['svhn', 'cifar100', 'lsun', 'celeba']},
+    'cifar100': {'ood_datasets': ['svhn', 'cifar10', 'lsun', 'celeba']},
+}
+
+class ConcatDataset(Dataset):
+    """Concatenate multiple datasets into a single dataset."""
+    
+    def __init__(self, datasets):
+        self.datasets = datasets
+        self.cumulative_sizes = []
+        total_size = 0
+        for dataset in datasets:
+            total_size += len(dataset)
+            self.cumulative_sizes.append(total_size)
+    
+    def __len__(self):
+        return self.cumulative_sizes[-1]
+    
+    def __getitem__(self, idx):
+        # Find which dataset the index belongs to
+        dataset_idx = 0
+        for i, cumulative_size in enumerate(self.cumulative_sizes):
+            if idx < cumulative_size:
+                dataset_idx = i
+                break
+        
+        # Calculate the actual index within that dataset
+        if dataset_idx == 0:
+            actual_idx = idx
+        else:
+            actual_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+        
+        return self.datasets[dataset_idx][actual_idx]
+
 class OODDetectionDataset(Dataset):
     """
     Dataset for OOD detection with paired (x_in, x_ood) samples.
@@ -703,18 +742,17 @@ class OODDetectionDataset(Dataset):
     def __init__(self, in_dist_dataset, ood_dataset):
         self.in_dist_dataset = in_dist_dataset
         self.ood_dataset = ood_dataset
-        # Use the smaller length to ensure paired batches
-        self.num_samples = min(len(in_dist_dataset), len(ood_dataset))
+        # Use the in-distribution dataset length to ensure we can iterate through all in-dist samples
+        self.num_samples = len(in_dist_dataset)
     
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx):
-        # Get in-distribution sample
         x_in, _ = self.in_dist_dataset[idx]
-        # Get OOD sample
-        x_ood, _ = self.ood_dataset[idx]
-        # Return dummy label (0.0) for compatibility with prepare_batch
+        # Randomly sample from OOD dataset to ensure full utilization of OOD data
+        ood_idx = random.randint(0, len(self.ood_dataset) - 1)
+        x_ood, _ = self.ood_dataset[ood_idx]
         return x_in, x_ood, torch.tensor(0.0)
 
 class OutOfDistributionDetectionDataModule(DataModule):
@@ -773,15 +811,15 @@ class OutOfDistributionDetectionDataModule(DataModule):
         if (stage == "fit" or stage == "validate") or stage is None:
             self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
             
-            # Validation: use test set for in-dist, and appropriate OOD
+            # Validation: use test set for in-dist, and standard OOD evaluation benchmarks
             in_dist_val = self._get_in_dist_dataset(train=False, transform=transform_test)
-            ood_val = self._get_ood_dataset(train=False, transform=transform_test)
+            ood_val = self._get_eval_ood_dataset(train=False, transform=transform_test)
             self.val_dataset = OODDetectionDataset(in_dist_val, ood_val)
         
         if stage == "test" or stage is None:
             # Test: use test set
             in_dist_test = self._get_in_dist_dataset(train=False, transform=transform_test)
-            ood_test = self._get_ood_dataset(train=False, transform=transform_test)
+            ood_test = self._get_eval_ood_dataset(train=False, transform=transform_test)
             self.test_dataset = OODDetectionDataset(in_dist_test, ood_test)
     
     def _get_transform(self, train=True):
@@ -850,40 +888,92 @@ class OutOfDistributionDetectionDataModule(DataModule):
                 'cifar100': 'svhn',
             }
             ood_name = ood_list.get(self.ood_in_dist, 'svhn')
-            return self._get_ood_by_name(ood_name, train=train)
+            return self._get_ood_by_name(ood_name, train=train, transform=transform)
         
         elif self.ood_base_type == 'universal':
             # Universal: 300K random images
             oe_file = os.path.join(self.args.data_dir, "300K_random_images.npy")
-            return OODRandomImagesDataset(oe_file)
+            return OODRandomImagesDataset(oe_file, transform=transform)
     
-    def _get_ood_by_name(self, ood_name, train=True):
+    def _get_ood_by_name(self, ood_name, train=True, transform=None):
         """Get OOD dataset by name."""
+        # Use provided transform or default to the one based on train flag
+        if transform is None:
+            transform = self._get_transform(train)
+        
         if ood_name == 'mnist':
             return dset.MNIST(self.args.data_dir, train=train, download=False, 
-                            transform=self._get_transform(train))
+                            transform=transform)
         elif ood_name == 'fashion_mnist':
             return dset.FashionMNIST(self.args.data_dir, train=train, download=False,
-                                    transform=self._get_transform(train))
+                                    transform=transform)
         elif ood_name == 'cifar10':
             return dset.CIFAR10(self.args.data_dir, train=train, download=False,
-                               transform=self._get_transform(train))
+                               transform=transform)
         elif ood_name == 'cifar100':
             return dset.CIFAR100(self.args.data_dir, train=train, download=False,
-                                transform=self._get_transform(train))
+                                transform=transform)
         elif ood_name == 'svhn':
             return dset.SVHN(self.args.data_dir, split='train' if train else 'test',
-                            download=False, transform=self._get_transform(train))
+                            download=False, transform=transform)
         elif ood_name == 'lsun':
             lsun_path = os.path.join(self.args.data_dir, 'LSUN_resize')
-            return dset.LSUN(lsun_path, transform=self._get_transform(train))
+            return dset.LSUN(lsun_path, transform=transform)
         elif ood_name == 'celeba':
             return dset.CelebA(
                 root=self.args.data_dir,
                 split="test" if not train else "train",
-                transform=transforms.Compose([transforms.Resize([32, 32]), transforms.ToTensor()]),
+                transform=transform,
                 download=False,
             )
+
+    def _load_ood_benchmarks(self, ood_names, train=False, transform=None):
+        """Load OOD benchmark datasets with error handling."""
+        loaded_datasets = []
+        for ood_name in ood_names:
+            try:
+                # Pass the transform directly to _get_ood_by_name to ensure it's applied correctly
+                ood_dataset = self._get_ood_by_name(ood_name, train=train, transform=transform)
+                # Only append if the dataset was successfully loaded (not None)
+                if ood_dataset is not None:
+                    loaded_datasets.append(ood_dataset)
+            except Exception as e:
+                print(f"Warning: Could not load OOD dataset '{ood_name}': {e}")
+                continue
+        return loaded_datasets
+
+    def _get_eval_ood_dataset(self, train=False, transform=None):
+        """Get evaluation OOD dataset based on OOD_EVAL_CONFIG."""
+        # Get the list of OOD datasets for the current in-distribution dataset
+        eval_ood_datasets = OOD_EVAL_CONFIG.get(self.ood_in_dist, {}).get('ood_datasets', [])
+        
+        # Load the OOD benchmark datasets
+        loaded_datasets = self._load_ood_benchmarks(eval_ood_datasets, train=train, transform=transform)
+        
+        # If no datasets were successfully loaded, fall back to the original OOD dataset
+        if not loaded_datasets:
+            print(f"Warning: No evaluation OOD datasets could be loaded for '{self.ood_in_dist}'. "
+                  f"Falling back to original OOD dataset.")
+            return self._get_ood_dataset(train=train, transform=transform)
+        
+        # Concatenate all successfully loaded OOD datasets
+        if len(loaded_datasets) == 1:
+            return loaded_datasets[0]
+        else:
+            return ConcatDataset(loaded_datasets)
+
+    def get_eval_ood_datasets(self, stage='val'):
+        """Get list of evaluation OOD datasets for separate AUROC calculation."""
+        # Get the list of OOD datasets for the current in-distribution dataset
+        eval_ood_datasets = OOD_EVAL_CONFIG.get(self.ood_in_dist, {}).get('ood_datasets', [])
+        
+        # Transform to use for evaluation
+        transform_test = self._get_transform(train=False)
+        
+        # Load the OOD benchmark datasets
+        loaded_datasets = self._load_ood_benchmarks(eval_ood_datasets, train=False, transform=transform_test)
+        
+        return loaded_datasets
 
 
 class OODRandomImagesDataset(Dataset):

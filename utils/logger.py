@@ -307,31 +307,51 @@ class TxtLoggerCallback(pl.Callback):
         )
     
     def _ood_val(self, trainer, pl_module):
+        metrics = self._get_metrics(trainer, ['val_auroc_mean', 'val_in_score_mean', 'val_ood_score_mean', 'val_score_gap'])
+        
+        all_metrics = trainer.callback_metrics
+        val_auroc_metrics = {k: v for k, v in all_metrics.items() if k.startswith('val_auroc_') and k != 'val_auroc_mean'}
+        
+        metrics.update(val_auroc_metrics)
+        
+        formatters = {
+            'val_auroc_mean':     lambda v: f"AUROC Mean {v:.4f}",
+            'val_in_score_mean':  lambda v: f"In Score {v:.4f}",
+            'val_ood_score_mean': lambda v: f"OOD Score {v:.4f}",
+            'val_score_gap':      lambda v: f"Score Gap {v:.4f}",
+        }
+        
+        for metric_name in val_auroc_metrics.keys():
+            formatters[metric_name] = lambda v, name=metric_name: f"{name.replace('val_', '').replace('_', ' ').title()} {v:.4f}"
+        
         self._log_epoch(
             trainer=trainer,
-            metrics=self._get_metrics(
-                trainer, ['val_auroc', 'val_in_score_mean', 'val_ood_score_mean', 'val_score_gap']
-            ),
-            formatters={
-                'val_auroc':         lambda v: f"AUROC {v:.4f}",
-                'val_in_score_mean':  lambda v: f"In Score {v:.4f}",
-                'val_ood_score_mean': lambda v: f"OOD Score {v:.4f}",
-                'val_score_gap':      lambda v: f"Score Gap {v:.4f}",
-            }
+            metrics=metrics,
+            formatters=formatters
         )
     
     def _ood_test(self, trainer, pl_module):
+        metrics = self._get_metrics(trainer, ['test_auroc_mean', 'test_in_score_mean', 'test_ood_score_mean'])
+        
+        all_metrics = trainer.callback_metrics
+        test_auroc_metrics = {k: v for k, v in all_metrics.items() if k.startswith('test_auroc_') and k != 'test_auroc_mean'}
+        
+        metrics.update(test_auroc_metrics)
+        
+        formatters = {
+            'test_auroc_mean':     lambda v: f"AUROC Mean {v:.4f}",
+            'test_in_score_mean':  lambda v: f"In Score {v:.4f}",
+            'test_ood_score_mean': lambda v: f"OOD Score {v:.4f}",
+        }
+        
+        for metric_name in test_auroc_metrics.keys():
+            formatters[metric_name] = lambda v, name=metric_name: f"{name.replace('test_', '').replace('_', ' ').title()} {v:.4f}"
+        
         self._log_epoch(
             trainer=trainer,
             prefix="Test",
-            metrics=self._get_metrics(
-                trainer, ['test_auroc', 'test_in_score_mean', 'test_ood_score_mean']
-            ),
-            formatters={
-                'test_auroc':         lambda v: f"AUROC {v:.4f}",
-                'test_in_score_mean':  lambda v: f"In Score {v:.4f}",
-                'test_ood_score_mean': lambda v: f"OOD Score {v:.4f}",
-            },
+            metrics=metrics,
+            formatters=formatters,
             use_max_epoch=False
         )
     
