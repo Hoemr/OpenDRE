@@ -32,7 +32,7 @@ SCORE_METHODS="${5:-dre_infty d3re}"
 # In-distribution datasets to run
 # Options: mnist, fashion_mnist, cifar10, cifar100
 # IN_DIST_DATASETS="${2:-mnist fashion_mnist}"
-IN_DIST_DATASETS="${2:-fashion_mnist}"
+IN_DIST_DATASETS="${2:-mnist}"
 # Example: IN_DIST_DATASETS="mnist fashion_mnist cifar10"
 
 # Base types to run (local, general, universal)

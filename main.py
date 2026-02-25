@@ -168,6 +168,7 @@ def train_likelihood_estimation(args):
         default_root_dir=save_path,
         logger=logger_utils.NullLogger(),  
         check_val_every_n_epoch=args.eval_freq,
+        enable_checkpointing=False,
         callbacks=callbacks,
         enable_progress_bar=enable_progress_bar, 
         num_sanity_val_steps=-1,  # -1: validate on entire dataset; 0: skip pre-validation
@@ -281,6 +282,7 @@ def train_fdiv_estimation(args):
         default_root_dir=save_path,
         logger=logger_utils.NullLogger(),  # Optionally add logger for TensorBoard : pl.loggers.TensorBoardLogger("./")
         check_val_every_n_epoch=args.eval_freq,
+        enable_checkpointing=False,
         callbacks=callbacks,
         enable_progress_bar=enable_progress_bar, 
         num_sanity_val_steps=0,   # -1: all val datasets; 0: no pre test
