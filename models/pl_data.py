@@ -801,14 +801,11 @@ class OutOfDistributionDetectionDataModule(DataModule):
         # Get transforms
         transform_train = self._get_transform(train=True)
         transform_test = self._get_transform(train=False)
-        
-        # Get in-distribution dataset
-        in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
-        
-        # Get OOD dataset
-        ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
-        
+
         if (stage == "fit" or stage == "validate") or stage is None:
+            # Get in-distribution dataset
+            in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
+            ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
             self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
             
             # Validation: use test set for in-dist, and standard OOD evaluation benchmarks
@@ -920,12 +917,8 @@ class OutOfDistributionDetectionDataModule(DataModule):
             lsun_path = os.path.join(self.args.data_dir, 'LSUN_resize')
             return dset.LSUN(lsun_path, transform=transform)
         elif ood_name == 'celeba':
-            return dset.CelebA(
-                root=self.args.data_dir,
-                split="test" if not train else "train",
-                transform=transform,
-                download=False,
-            )
+            return dset.CelebA(root=self.args.data_dir, split="test" if not train else "train",
+                transform=transform, download=False,)
 
     def _load_ood_benchmarks(self, ood_names, train=False, transform=None):
         """Load OOD benchmark datasets with error handling."""
@@ -944,10 +937,10 @@ class OutOfDistributionDetectionDataModule(DataModule):
 
     def _get_eval_ood_dataset(self, train=False, transform=None):
         """Get evaluation OOD dataset based on OOD_EVAL_CONFIG."""
-        # Get the list of OOD datasets for the current in-distribution dataset
+        # Dataset Name: Get the list of OOD datasets for the current in-distribution dataset
         eval_ood_datasets = OOD_EVAL_CONFIG.get(self.ood_in_dist, {}).get('ood_datasets', [])
         
-        # Load the OOD benchmark datasets
+        # Dataset: Load the OOD benchmark datasets
         loaded_datasets = self._load_ood_benchmarks(eval_ood_datasets, train=train, transform=transform)
         
         # If no datasets were successfully loaded, fall back to the original OOD dataset

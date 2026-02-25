@@ -24,6 +24,7 @@ import models.losses as train_step_fns
 from .pl_data import SPECS, DATA_SHAPES
 import utils.visualization as vis_utils
 from utils.sampling import sampling
+from .pl_data import OOD_EVAL_CONFIG
 
 
 class DensityEstimationModel(pl.LightningModule):
@@ -1160,7 +1161,6 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         # Get ID test set and all OOD evaluation datasets
         id_dataset = self.datamodule.val_dataset.in_dist_dataset
         ood_datasets = self.datamodule.get_eval_ood_datasets(stage='val')
-        from .pl_data import OOD_EVAL_CONFIG
         ood_names = list(OOD_EVAL_CONFIG[self.ood_in_dist]['ood_datasets'])
         
         # Compute ID scores (only once)
@@ -1212,7 +1212,6 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         # Get ID test set and all OOD evaluation datasets
         id_dataset = self.datamodule.test_dataset.in_dist_dataset
         ood_datasets = self.datamodule.get_eval_ood_datasets(stage='test')
-        from .pl_data import OOD_EVAL_CONFIG
         ood_names = list(OOD_EVAL_CONFIG[self.ood_in_dist]['ood_datasets'])
         
         # Compute ID scores (only once)
