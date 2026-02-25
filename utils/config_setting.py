@@ -171,8 +171,8 @@ def get_fdiv_args(parser):
     return parser
 
 def set_image_args(args):
-    args.GRBC_epsilon = 0.
-    args.eval_freq = 10
+    # args.GRBC_epsilon = 0.
+    # args.eval_freq = 10
     args.embed_dim = 128
     args.layer_type = "conv"    # useless now
     args.dims = "128-256-512"  # 128-256-512   or 64-128-256
@@ -252,7 +252,6 @@ def parse_args():
             args.early_stopping = 60 * num_gpus
     
     elif args.task == "fdiv_estimation":
-        args.eval_freq = 100
         args.num_data_head = 3
         args.num_time_head = 3
         
@@ -275,6 +274,7 @@ def parse_args():
             args.epochs = 10000
             # args.batch_size = 9600
             args.norm = False
+            args.eval_freq = 100
             
         elif args.subtask == "change_point_detection":
             # python main.py fdiv_estimation --method dre --subtask change_point_detection --data cpd_text --use_simplex True --cpd_swl 64
@@ -283,11 +283,13 @@ def parse_args():
             args.num_data_head = 1
             args.num_time_head = 1
             # args.batch_size = 500
+            args.eval_freq = 100
         
         elif args.subtask == "mutual_information":
             # python main.py fdiv_estimation --method dre --subtask mutual_information --data diag_multi_gauss --decomp --K_decomp 1000 --epochs 40000 --d 160 --gpu_id 0
             # python main.py fdiv_estimation --method dre --subtask mutual_information --data half_cube_map --decomp --K_decomp 300 --epochs 10000 --d 2 --rho 0.5 --batch_size 4800 --gpu_id 0
             args.reload_interval = args.eval_freq * 5
+            args.eval_freq = 100
         
         elif args.subtask == "mi_realdata":
             # base: python main.py fdiv_estimation --subtask mi_realdata
@@ -318,7 +320,7 @@ def parse_args():
             # args.dims = "128-256-512"  # Same as real_image for CNN
             args.epochs = 500
             # args.batch_size = 512
-            args.eval_freq = 10
+            # args.eval_freq = 10
             args.reload_interval = args.epochs
     
     return args

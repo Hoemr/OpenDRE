@@ -46,7 +46,7 @@ class DataModule(pl.LightningDataModule, ABC):
         return self._create_dataloader(self.val_dataset, batch_size=self.test_batch_size)
 
     def test_dataloader(self):
-        return self._create_dataloader(self.test_dataset, batch_size=self.test_batch_size, shuffle=True)
+        return self._create_dataloader(self.test_dataset, batch_size=self.test_batch_size, shuffle=False)
         
 class IterDataModule(pl.LightningDataModule, ABC):
     def __init__(self, args):
@@ -809,15 +809,13 @@ class OutOfDistributionDetectionDataModule(DataModule):
             self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
             
             # Validation: use test set for in-dist, and standard OOD evaluation benchmarks
-            in_dist_val = self._get_in_dist_dataset(train=False, transform=transform_test)
-            ood_val = self._get_eval_ood_dataset(train=False, transform=transform_test)
-            self.val_dataset = OODDetectionDataset(in_dist_val, ood_val)
+            self.val_dataset = DummyDataset(input_shape=(3, 32, 32))
+            # in_dist_val = self._get_in_dist_dataset(train=False, transform=transform_test)
+            # ood_val = self._get_eval_ood_dataset(train=False, transform=transform_test)
+            # self.val_dataset = OODDetectionDataset(in_dist_val, ood_val)
         
         if stage == "test" or stage is None:
-            # Test: use test set
-            in_dist_test = self._get_in_dist_dataset(train=False, transform=transform_test)
-            ood_test = self._get_eval_ood_dataset(train=False, transform=transform_test)
-            self.test_dataset = OODDetectionDataset(in_dist_test, ood_test)
+            self.test_dataset = DummyDataset(input_shape=(3, 32, 32))
     
     def _get_transform(self, train=True):
         """Get transform for in-distribution dataset."""
@@ -860,6 +858,8 @@ class OutOfDistributionDetectionDataModule(DataModule):
     
     def _get_in_dist_dataset(self, train=True, transform=None):
         """Get in-distribution dataset."""
+        if transform is None:
+            transform = self._get_transform(train=train)
         if self.ood_in_dist == 'mnist':
             return dset.MNIST(self.args.data_dir, train=train, download=False, transform=transform)
         elif self.ood_in_dist == 'fashion_mnist':
@@ -965,8 +965,31 @@ class OutOfDistributionDetectionDataModule(DataModule):
         
         # Load the OOD benchmark datasets
         loaded_datasets = self._load_ood_benchmarks(eval_ood_datasets, train=False, transform=transform_test)
-        
+
         return loaded_datasets
+
+
+class DummyDataset(Dataset):
+    """
+    A minimal dataset containing a single dummy sample.
+    Used to ensure PyTorch Lightning enters the validation/test phase 
+    and triggers epoch_end hooks without loading actual data.
+    """
+    def __init__(self, input_shape=(3, 32, 32)):
+        """
+        Initialize the dummy dataset.
+        """
+        self.input_shape = input_shape
+
+    def __len__(self):
+        # Return 1 to ensure exactly one batch is processed
+        return 1
+
+    def __getitem__(self, idx):
+        # Return a zero-filled tensor and a dummy label
+        dummy_img = torch.zeros(self.input_shape)
+        dummy_label = 0
+        return dummy_img, dummy_label
 
 
 class OODRandomImagesDataset(Dataset):

@@ -612,11 +612,6 @@ class DensityRatioEstimationModel(pl.LightningModule):
         else:
             raise ValueError(f"Invalid sub_method {self.args.sub_method}")
 
-    def _get_image_backbone(self):
-        """Check if we should use image backbone (ResNet/WideResNet)."""
-        image_backbone = getattr(self.args, 'image_backbone', None)
-        return image_backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']
-
     def _build_model_with_image_backbone(self):
         """Build model with ResNet/WideResNet backbone for image tasks."""
         image_backbone = getattr(self.args, 'image_backbone', 'resnet18')
@@ -706,7 +701,6 @@ class DensityRatioEstimationModel(pl.LightningModule):
         """Constructs the neural network based on task type and settings."""
         # Check if we should use image backbone (ResNet/WideResNet)
         if self.args.data in DATA_SHAPES.keys():
-        # if self._get_image_backbone():
             return self._build_model_with_image_backbone()
         else:
             return self._build_default_model()
@@ -1086,13 +1080,6 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         # Training metrics storage
         self.train_loss_sum = 0.0
         self.train_loss_count = 0
-        
-        # OOD metrics storage
-        self.ood_metrics_db = []
-        
-        # Initialize test_step_outputs
-        # self.validation_step_outputs = []
-        self.test_step_outputs = []
 
     def _build_sde(self, args):
         """Use image interpolation SDE for CPD while reusing base setup logic."""
@@ -1139,27 +1126,15 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         with torch.no_grad():
             # Compute log density ratio: log r(x) = log p(x) - log q(x)
             log_ratio, _ = self.density_ratio_fn(self.model, batch, joint=None)
-            # Use exp(log ratio) as OOD score (higher = more likely in-distribution)
             ood_scores = log_ratio.squeeze()
         return ood_scores
     
     def validation_step(self, batch, batch_idx):
         return {}
-        # px, qx, _ = self.prepare_batch(batch)
-        
-        # # Store outputs for epoch end computation
-        # step_output = {
-        #     "in_dist_batch": px,
-        #     "ood_batch": qx,
-        #     "batch_size": px.shape[0],
-        # }
-        # self.validation_step_outputs.append(step_output)
-        
-        # return step_output
-    
+
     def on_validation_epoch_end(self):
         # Get ID test set and all OOD evaluation datasets
-        id_dataset = self.datamodule.val_dataset.in_dist_dataset
+        id_dataset = self.datamodule.train_dataset.in_dist_dataset
         ood_datasets = self.datamodule.get_eval_ood_datasets(stage='val')
         ood_names = list(OOD_EVAL_CONFIG[self.ood_in_dist]['ood_datasets'])
         
@@ -1196,21 +1171,10 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
     
     def test_step(self, batch, batch_idx):
         return {}
-        # px, qx, _ = self.prepare_batch(batch)
-        
-        # # Store outputs for epoch end computation
-        # step_output = {
-        #     "in_dist_batch": px,
-        #     "ood_batch": qx,
-        #     "batch_size": px.shape[0],
-        # }
-        # self.test_step_outputs.append(step_output)
-        
-        # return step_output
     
     def on_test_epoch_end(self):
         # Get ID test set and all OOD evaluation datasets
-        id_dataset = self.datamodule.test_dataset.in_dist_dataset
+        id_dataset = self.datamodule._get_in_dist_dataset(train=True)
         ood_datasets = self.datamodule.get_eval_ood_datasets(stage='test')
         ood_names = list(OOD_EVAL_CONFIG[self.ood_in_dist]['ood_datasets'])
         
@@ -1240,9 +1204,6 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         if all_aurocs:
             mean_auroc = np.mean(all_aurocs)
             self.log("test_auroc_mean", mean_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        
-        # # Clear outputs
-        # self.test_step_outputs.clear()
     
     def _compute_scores_for_loader(self, loader):
         """Compute OOD scores for all samples in a loader."""

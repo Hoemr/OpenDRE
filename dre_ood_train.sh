@@ -7,11 +7,11 @@
 # Configuration
 EPOCHS=1000
 BATCH_SIZE=1024
-LR=0.01
+LR=0.001
 NOISE_STD=0.1
 ANNEAL_ALPHA_INIT=0.142857
 ANNEAL_GAMMA=1.0
-MAX_TASKS_PER_GPU=1  # Each GPU runs one task at a time
+MAX_TASKS_PER_GPU=2  # Each GPU runs one task at a time
 CHECK_INTERVAL=20  # Check for available GPU every 20 seconds
 LAUNCH_WAIT=30  # Wait 30 seconds after launching before checking for next GPU
 
@@ -31,8 +31,8 @@ SCORE_METHODS="${5:-dre_infty d3re}"
 
 # In-distribution datasets to run
 # Options: mnist, fashion_mnist, cifar10, cifar100
-# IN_DIST_DATASETS="${2:-mnist fashion_mnist}"
-IN_DIST_DATASETS="${2:-mnist}"
+IN_DIST_DATASETS="${2:-mnist fashion_mnist}"
+# IN_DIST_DATASETS="${2:-mnist}"
 # Example: IN_DIST_DATASETS="mnist fashion_mnist cifar10"
 
 # Base types to run (local, general, universal)
@@ -166,7 +166,8 @@ run_experiment() {
             --sub_method score \
             --subsub_method "$dre_method" \
             --condition True \
-            --image_backbone unet \
+            --image_backbone "$backbone" \
+            --joint False \
             --gpu_id $gpu_id \
             > /dev/null 2>&1 &
     else
