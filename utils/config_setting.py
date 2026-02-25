@@ -177,12 +177,12 @@ def set_image_args(args):
     args.layer_type = "conv"    # useless now
     args.dims = "128-256-512"  # 128-256-512   or 64-128-256
     args.grad_clip = 10.
-    if args.data in ["mnist", "image", "fashion_mnist"]:
-        args.batch_size = 1024
-        args.test_batch_size = 1024
-    else:
-        args.batch_size = 512
-        args.test_batch_size = 512
+    # if args.data in ["mnist", "image", "fashion_mnist"]:
+    #     args.batch_size = 1024
+    #     args.test_batch_size = 1024
+    # else:
+    #     args.batch_size = 512
+    #     args.test_batch_size = 512
     return args
 
 def parse_args():
@@ -273,7 +273,7 @@ def parse_args():
         if args.subtask == "distribution_shift":
             # python main.py fdiv_estimation --method dre --subtask distribution_shift --data gauss_shift --decomp --K_decomp 300 --shift_steps 5 --shift 0.05 --d 80
             args.epochs = 10000
-            args.batch_size = 9600
+            # args.batch_size = 9600
             args.norm = False
             
         elif args.subtask == "change_point_detection":

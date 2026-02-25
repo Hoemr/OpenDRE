@@ -5,8 +5,8 @@
 # RUN: nohup bash dre_ood_train.sh > /dev/null 2>&1 &
 
 # Configuration
-EPOCHS=500
-BATCH_SIZE=512
+EPOCHS=1000
+BATCH_SIZE=1024
 LR=0.01
 NOISE_STD=0.1
 ANNEAL_ALPHA_INIT=0.142857
