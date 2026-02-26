@@ -22,7 +22,7 @@ gpus=(8 9)
 # Neural DRE methods to run (can be multiple, space-separated)
 # Options: logistic, nce, infonce, rkl, hellinger, kl, gamma, ew, pw, kulsif
 # Note: These correspond to subsub_method in OS_DRE (neural sub_method)
-NEURAL_DRE_METHODS="${1:-logistic nce pw}"
+NEURAL_DRE_METHODS="${1:-nce pw}"
 # Example: NEURAL_DRE_METHODS="logistic nce rkl"
 
 # Score-based OOD methods (subsub_method)
