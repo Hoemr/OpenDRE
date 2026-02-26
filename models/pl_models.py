@@ -1165,9 +1165,6 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         if all_aurocs:
             mean_auroc = np.mean(all_aurocs)
             self.log("val_auroc_mean", mean_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        
-        # # Clear outputs
-        # self.validation_step_outputs.clear()
     
     def test_step(self, batch, batch_idx):
         return {}

@@ -38,7 +38,7 @@ def get_common_args(parser):
     parser.add_argument('--batch_size', type=int, default=9600)
     parser.add_argument('--test_batch_size', type=int, default=5000)
     parser.add_argument('--epochs', type=int, default=3000)   
-    parser.add_argument('--eval_freq', type=int, default=50) 
+    parser.add_argument('--eval_freq', type=int, default=10) 
     parser.add_argument('--gpu_id', type=int, nargs='+', default=[0])
     parser.add_argument("--seed", type=int, default=3407)
     parser.add_argument('--lr', type=float, default=1e-3)
@@ -347,7 +347,7 @@ def get_save_path(args):
             key_args.extend(["rho"+str(args.rho)])
         
         if args.subtask == "ood_detection":
-            key_args.extend([args.ood_in_dist, args.ood_base_type])
+            key_args.extend([args.ood_in_dist, args.ood_base_type, f"noise{args.ood_noise_std}",])
   
     else:
         raise ValueError(f"Task {args.task} is not implemented!")

@@ -739,9 +739,10 @@ class OODDetectionDataset(Dataset):
     Dataset for OOD detection with paired (x_in, x_ood) samples.
     Used for training density ratio estimators for OOD detection.
     """
-    def __init__(self, in_dist_dataset, ood_dataset):
+    def __init__(self, in_dist_dataset, ood_dataset, noise_std=0.0):
         self.in_dist_dataset = in_dist_dataset
         self.ood_dataset = ood_dataset
+        self.noise_std = noise_std
         # Use the in-distribution dataset length to ensure we can iterate through all in-dist samples
         self.num_samples = len(in_dist_dataset)
     
@@ -753,6 +754,12 @@ class OODDetectionDataset(Dataset):
         # Randomly sample from OOD dataset to ensure full utilization of OOD data
         ood_idx = random.randint(0, len(self.ood_dataset) - 1)
         x_ood, _ = self.ood_dataset[ood_idx]
+
+        # Add Gaussian noise to both in-distribution and OOD samples
+        if self.noise_std > 0:
+            x_in = x_in + torch.randn_like(x_in) * self.noise_std
+            x_ood = x_ood + torch.randn_like(x_ood) * self.noise_std
+
         return x_in, x_ood, torch.tensor(0.0)
 
 class OutOfDistributionDetectionDataModule(DataModule):
@@ -783,7 +790,6 @@ class OutOfDistributionDetectionDataModule(DataModule):
         self.num_workers = 0
         
     def prepare_data(self):
-        # Download datasets if needed
         if self.ood_in_dist == 'mnist':
             dset.MNIST(self.args.data_dir, train=True, download=True)
             dset.MNIST(self.args.data_dir, train=False, download=True)
@@ -798,7 +804,6 @@ class OutOfDistributionDetectionDataModule(DataModule):
             dset.CIFAR100(self.args.data_dir, train=False, download=True)
 
     def setup(self, stage=None):
-        # Get transforms
         transform_train = self._get_transform(train=True)
         transform_test = self._get_transform(train=False)
 
@@ -806,7 +811,11 @@ class OutOfDistributionDetectionDataModule(DataModule):
             # Get in-distribution dataset
             in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
             ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
-            self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
+            self.train_dataset = OODDetectionDataset(
+                in_dist_dataset,
+                ood_dataset,
+                noise_std=self.ood_noise_std,
+            )
             
             # Validation: use test set for in-dist, and standard OOD evaluation benchmarks
             self.val_dataset = DummyDataset(input_shape=(3, 32, 32))
@@ -899,26 +908,20 @@ class OutOfDistributionDetectionDataModule(DataModule):
             transform = self._get_transform(train)
         
         if ood_name == 'mnist':
-            return dset.MNIST(self.args.data_dir, train=train, download=False, 
-                            transform=transform)
+            return dset.MNIST(self.args.data_dir, train=train, download=False, transform=transform)
         elif ood_name == 'fashion_mnist':
-            return dset.FashionMNIST(self.args.data_dir, train=train, download=False,
-                                    transform=transform)
+            return dset.FashionMNIST(self.args.data_dir, train=train, download=False, transform=transform)
         elif ood_name == 'cifar10':
-            return dset.CIFAR10(self.args.data_dir, train=train, download=False,
-                               transform=transform)
+            return dset.CIFAR10(self.args.data_dir, train=train, download=False, transform=transform)
         elif ood_name == 'cifar100':
-            return dset.CIFAR100(self.args.data_dir, train=train, download=False,
-                                transform=transform)
+            return dset.CIFAR100(self.args.data_dir, train=train, download=False, transform=transform)
         elif ood_name == 'svhn':
-            return dset.SVHN(self.args.data_dir, split='train' if train else 'test',
-                            download=False, transform=transform)
+            return dset.SVHN(self.args.data_dir, split='train' if train else 'test', download=False, transform=transform)
         elif ood_name == 'lsun':
             lsun_path = os.path.join(self.args.data_dir, 'LSUN_resize')
             return dset.LSUN(lsun_path, transform=transform)
         elif ood_name == 'celeba':
-            return dset.CelebA(root=self.args.data_dir, split="test" if not train else "train",
-                transform=transform, download=False,)
+            return dset.CelebA(root=self.args.data_dir, split="test" if not train else "train", transform=transform, download=False,)
 
     def _load_ood_benchmarks(self, ood_names, train=False, transform=None):
         """Load OOD benchmark datasets with error handling."""
