@@ -7,9 +7,6 @@ import torch.nn.functional as F
 # from torch.func import vmap, jacrev
 from torch.distributions import Beta
 
-def stopgrad(x):
-    return x.detach()
-
 class BayesianTrajectory(nn.Module):
     """Base class for Bayesian trajectory optimization"""
     

@@ -12,8 +12,8 @@ from path import bayesian_path
 from losses.score_matching import TimeSampler
 
 KMMBayesianTrajectory = bayesian_path.KMMBayesianTrajectory
-stopgrad = bayesian_path.stopgrad
-
+def stopgrad(x):
+    return x.detach()
 
 class ConcatSquashExtendLinear(nn.Module):
     def __init__(self, dim_in, dim_out):
