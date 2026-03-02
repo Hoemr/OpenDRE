@@ -10,14 +10,14 @@ class NeuralDensityRatioTrainStepFn:
     Methods based on f-Divergence Duality in Classification.
     """
 
-    def __init__(self, args, sde=None, method='logistic'):
+    def __init__(self, args, path_model=None, method='logistic'):
         self.args = args
         self.method = method
         self.reg_param = getattr(args, 'reg_param', 0.1)
-        self.sde = sde
+        self.path = path_model
         
-        # Check if SDE is available for NLL calculation (done once at init)
-        self.has_sde = sde is not None and hasattr(sde, 'prior_logp')
+        # Check if path model is available for NLL calculation (done once at init)
+        self.has_path_model = path_model is not None and hasattr(path_model, 'prior_logp')
         
         # Exponential Weight (EW) parameter
         self.ew_alpha = getattr(args, 'ew_alpha', 2.0)  # Default from paper
@@ -62,9 +62,9 @@ class NeuralDensityRatioTrainStepFn:
     def _calc_nll(self, log_r_px, px_batch):
         # NLL = - log p1(x) = - (log r(x) + log p0(x))
         # Return 0 if SDE is not available (checked once at init)
-        if not self.has_sde:
+        if not self.has_path_model:
             return torch.zeros_like(log_r_px)
-        return - (log_r_px + self.sde.prior_logp(px_batch))
+        return - (log_r_px + self.path.prior_logp(px_batch))
     
     def compute_weight_function(self, x, tau=50.0):
         """

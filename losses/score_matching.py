@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+"""Score matching losses and time sampling for path-based (ODE/SDE) models. Reusable across domains."""
 
 import torch
 import torch.nn as nn
@@ -7,8 +8,81 @@ import torch.nn.functional as F
 import math
 
 from core.utils import divergence_approx, jacobian_frobenius_divergence_approx
-from sde import bayesian_path as BayesianPath
 from estimators.estimators import secant_to_tangent
+
+
+class TimeSampler(nn.Module):
+    """Time sampler for score matching: uniform, log-normal, or importance-weighted t sampling."""
+    def __init__(self, weights_fn=None, uniform_eps=1e-5, min_weight=1e-8,
+                 update_freq=100, grid_size=10000, device='cpu',
+                 t_mode="IS", mu=-0.4, sigma=1, aligned_ratio=0.25,
+                 use_interval_annealing=False, annealing_total_steps=50000, annealing_initial_width=0.01,
+                 annealing_tangent_ramp_up_start_step=20000, final_tangent_ratio=0.75):
+        super().__init__()
+        self.weights_fn = weights_fn
+        self.eps = uniform_eps
+        self.grid_size = grid_size
+        self.min_weight = min_weight
+        self.update_freq = update_freq
+        self.device = device
+        self.aligned_ratio = aligned_ratio
+        self.use_interval_annealing = use_interval_annealing
+        self.annealing_total_steps = float(annealing_total_steps)
+        self.annealing_initial_width = annealing_initial_width
+        self.tangent_start_step = annealing_total_steps * 0.2
+        self.final_aligned_ratio = 1.0 - final_tangent_ratio
+        self.register_buffer('t_grid', torch.linspace(uniform_eps, 1 - uniform_eps, grid_size, device=device).unsqueeze(-1))
+        self.register_buffer('weights', torch.ones(grid_size, device=device) / grid_size)
+        self.step = 0
+        if t_mode == "IS" and weights_fn:
+            self.sampling_fn = self.importance_sampling
+        elif t_mode == "lognorm":
+            self.sampling_fn = lambda batch_size, device: self.lognorm(batch_size, mu=mu, sigma=sigma, device=device)
+        else:
+            self.sampling_fn = self.uniform
+
+    def uniform(self, batch_size, device='cpu'):
+        return torch.rand(batch_size, 1, device=device) * (1 - 2 * self.eps) + self.eps
+
+    def lognorm(self, batch_size, mu=-0.4, sigma=1, device='cpu'):
+        eta = torch.randn((batch_size, 1), device=device) * sigma + mu
+        return torch.sigmoid(eta).clamp(self.eps, 1 - self.eps)
+
+    def importance_sampling(self, batch_size, device='cpu'):
+        if self.step % self.update_freq == 1:
+            self.update_weights()
+        idx = torch.multinomial(self.weights, batch_size, replacement=True)
+        return self.t_grid[idx].to(device)
+
+    @torch.no_grad()
+    def update_weights(self):
+        w = self.weights_fn(self.t_grid).clamp(min=1e-12).squeeze()
+        self.weights.copy_(torch.clamp(w / w.sum(), min=self.min_weight))
+
+    def sample_t(self, batch_size, device="cpu"):
+        self.step += 1
+        return self.sampling_fn(batch_size, device)
+
+    def sample_l_t(self, batch_size, device="cpu"):
+        self.step += 1
+        l = self.sampling_fn(batch_size, device)
+        t = self.sampling_fn(batch_size, device)
+        if self.use_interval_annealing:
+            progress = min(1.0, self.step / self.annealing_total_steps)
+            cosine_factor = 0.5 * (1 + math.cos(math.pi * progress))
+            current_max_width = self.annealing_initial_width + (1 - cosine_factor) * (1.0 - self.annealing_initial_width)
+            current_aligned_ratio = max(self.final_aligned_ratio, 0.8 * (1 - progress))
+            delta = (l - t).abs()
+            scale_factor = torch.clamp(current_max_width / delta, max=1.0)
+            l_constrained = t + (l - t) * scale_factor
+            mask = torch.rand(batch_size, 1, device=device) < current_aligned_ratio
+            l = torch.where(mask, t, l_constrained)
+        else:
+            mask = torch.rand(batch_size, 1, device=device) < self.aligned_ratio
+            l = torch.where(mask, t, l)
+        l, t = torch.min(l, t), torch.max(l, t)
+        return l, t
+
 
 class ScoreMatchingTrainStepFn(nn.Module):
     def __init__(self, args, sde):
@@ -19,7 +93,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         self.device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
         
         # base
-        self.sde = sde
+        self.path = sde
         self.eps = args.eps
         self.joint = args.joint
         self.condition = args.condition
@@ -57,7 +131,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
     def set_time_sampling_fn(self, args):
         self.t_mode = args.t_mode
         if self.t_mode in ["IS", "AIS"]:
-            weights_fn=lambda t: self.sde.get_weights_denoise(t)[0]   # weights is inversely proportional to score variance
+            weights_fn=lambda t: self.path.get_weights_denoise(t)[0]   # weights is inversely proportional to score variance
         else:
             weights_fn = None
         use_interval_annealing=getattr(args, 'IA', False)
@@ -67,7 +141,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
             annealing_total_steps = int(self.total_step * 0.5)
             
         update_freq = 1000 if self.gpp else 1000000
-        self.t_sampler = BayesianPath.TimeSampler(
+        self.t_sampler = TimeSampler(
                     weights_fn=weights_fn,
                     uniform_eps=self.eps,
                     device=args.device,
@@ -116,8 +190,8 @@ class ScoreMatchingTrainStepFn(nn.Module):
             else:
                 self.loss_fn = self.time_score_matching
             
-            self._weight_fn = self.sde.marginal_var_fn
-            self._weight_dt_fn = self.sde.marginal_var_dt_fn
+            self._weight_fn = self.path.marginal_var_fn
+            self._weight_dt_fn = self.path.marginal_var_dt_fn
     
     def _init_score_computation(self):
         if self.SAI:
@@ -142,13 +216,13 @@ class ScoreMatchingTrainStepFn(nn.Module):
     # ==================== get scores ====================
     def _compute_scores_sai_joint(self, score_model, x0, x1, t, xt, l):
         """secant alignment identity, joint score"""
-        dx_dt = self.sde.marginal_derivative_fn(x0, x1, t, *self.sde.get_coefficients_and_derivatives(t)[:4])
+        dx_dt = self.path.marginal_derivative_fn(x0, x1, t, *self.path.get_coefficients_and_derivatives(t)[:4])
         score_x, score_t = secant_to_tangent(score_model, xt, dx_dt, l, t, joint=True)
         return score_x, score_t
     
     def _compute_scores_sai_time(self, score_model, x0, x1, t, xt, l):
         """Secant alignment identity, time score"""
-        dx_dt = self.sde.marginal_derivative_fn(x0, x1, t, *self.sde.get_coefficients_and_derivatives(t)[:4])
+        dx_dt = self.path.marginal_derivative_fn(x0, x1, t, *self.path.get_coefficients_and_derivatives(t)[:4])
         score_t = secant_to_tangent(score_model, xt, dx_dt, l, t, joint=False)
         return score_t
     
@@ -237,8 +311,8 @@ class ScoreMatchingTrainStepFn(nn.Module):
     
     def _compute_coefficients_and_sample(self, x0, x1, t, with_grad=False):
         """evaluate coefficients and sample xt"""
-        alpha_t, beta_t, d_alpha_dt, d_beta_dt = self.sde.get_coefficients_and_derivatives(t)
-        xt = self.sde.marginal_sample(x0, x1, t, alpha_t=alpha_t, beta_t=beta_t)
+        alpha_t, beta_t, d_alpha_dt, d_beta_dt = self.path.get_coefficients_and_derivatives(t)
+        xt = self.path.marginal_sample(x0, x1, t, alpha_t=alpha_t, beta_t=beta_t)
         
         if with_grad:
             xt = xt.requires_grad_(True)
@@ -248,15 +322,15 @@ class ScoreMatchingTrainStepFn(nn.Module):
     
     def _precompute_norms(self, x0, x1):
         # return x0_norm_sq, x1_norm_sq, x0x1_norm_sq
-        return self.sde.inner_product(x0, x0), self.sde.inner_product(x1, x1), self.sde.inner_product(x0, x1)
+        return self.path.inner_product(x0, x0), self.path.inner_product(x1, x1), self.path.inner_product(x0, x1)
         
     def _apply_kmm_regularization(self, loss, score_t, x0, x1, time_score_var, batch_size):
         # used in KMM param...
         t = torch.rand(batch_size, 1).to(x0) * (1 - 2 * self.eps) + self.eps
         # score_reg = score_t ** 2
         score_reg = 0.
-        variance = self.sde.get_score_var(t, x0, x1)[0]
-        elbo = self.sde.gaussian_process.elbo(x0, x1, t, variance=variance, score_reg=score_reg)
+        variance = self.path.get_score_var(t, x0, x1)[0]
+        elbo = self.path.gaussian_process.elbo(x0, x1, t, variance=variance, score_reg=score_reg)
         
         weight = 1. / time_score_var.mean()
         return self.adaptive_loss_weighting([loss * weight, -elbo * weight])
@@ -357,14 +431,14 @@ class ScoreMatchingTrainStepFn(nn.Module):
         with torch.no_grad():
             alpha_t, beta_t, d_alpha_dt, d_beta_dt, xt, t = self._compute_coefficients_and_sample(x0, x1, t)
         
-            marginal_var = self.sde.marginal_var_fn(t, alpha_t, beta_t)   # used for stable training
+            marginal_var = self.path.marginal_var_fn(t, alpha_t, beta_t)   # used for stable training
             marginal_std = marginal_var.sqrt()
             
-            time_score_var = self.sde.get_score_var(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt)[0]
-            target_cond_time_score = self.sde.get_score_target(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt, dim)
+            time_score_var = self.path.get_score_var(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt)[0]
+            target_cond_time_score = self.path.get_score_target(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt, dim)
 
             lambda_t_time = self._weight_fn(time_score_var)
-            self.sde.set_z()
+            self.path.set_z()
 
         score_t = self._compute_scores(score_model, x0, x1, t, xt, l)
         fk_xt = score_model.get_fk_reg() if hasattr(score_model, 'get_fk_reg') else None 
@@ -393,14 +467,14 @@ class ScoreMatchingTrainStepFn(nn.Module):
         with torch.no_grad():
             alpha_t, beta_t, d_alpha_dt, d_beta_dt, xt, t = self._compute_coefficients_and_sample(x0, x1, t)
 
-            marginal_var = self.sde.marginal_var_fn(t, alpha_t, beta_t)   # used for stable training
+            marginal_var = self.path.marginal_var_fn(t, alpha_t, beta_t)   # used for stable training
             marginal_std = marginal_var.sqrt()
             
-            time_score_var, data_score_var = self.sde.get_score_var(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt)
-            target_cond_time_score, target_cond_data_score = self.sde.get_score_target(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt, dim)
+            time_score_var, data_score_var = self.path.get_score_var(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt)
+            target_cond_time_score, target_cond_data_score = self.path.get_score_target(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt, dim)
 
             lambda_t_time, lambda_t_data = self._weight_fn(time_score_var, data_score_var)
-            self.sde.set_z()
+            self.path.set_z()
         
         score_x, score_t= self._compute_scores(score_model, x0, x1, t, xt, l)
         fk_xt = score_model.get_fk_reg() if hasattr(score_model, 'get_fk_reg') else None 
@@ -472,7 +546,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
                 reg_loss += bregman
                 
                 # if self.task == "likelihood_estimation":
-                #     nll = - (logr1.view((batch_size, 1)) + self.sde.prior_logp(x1).view((batch_size, 1))).mean()
+                #     nll = - (logr1.view((batch_size, 1)) + self.path.prior_logp(x1).view((batch_size, 1))).mean()
                 #     # nll = - score_model.likelihood_estimation(x1, f_k=fk_x1).view((batch_size, 1))
                     
                 #     # bpd = nll / (np.log(2) * np.prod(x1.shape[1:]))  # bpd
@@ -557,7 +631,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
             #     elbo_avg = get_avg_and_format(-elbo)
             #     print(f"elbo: {elbo_avg}")
             
-            # likelihood_fn = self.get_likelihood_fn(self.sde, rtol=self.args.rtol, atol=self.args.atol, solver=self.args.solver, eps=self.args.eps)
+            # likelihood_fn = self.get_likelihood_fn(self.path, rtol=self.args.rtol, atol=self.args.atol, solver=self.args.solver, eps=self.args.eps)
             # logp, nfe = likelihood_fn(score_model, x0, self.joint)
             # nll = -logp
             return {'loss': loss.mean(), 'nll': nll.mean()}

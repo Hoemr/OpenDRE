@@ -13,7 +13,7 @@ import torchvision.utils as vutils
 import nn_models as base_models
 import losses.losses as train_step_fns
 from pl_data import DATA_SHAPES, SPECS
-from sde import ImageInterpXt
+from path import ImageInterpXt
 import visualization.visualization as vis_utils
 from sampling import sampling
 
@@ -33,10 +33,10 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
         return ImageInterpXt(args=args)
 
     def set_basic_functions(self, args):
-        self.sde = self._build_sde(args)
+        self.path = self._build_sde(args)
         self.likelihood_fn = self.get_density_fn()
         self.density_ratio_fn = self.get_dr_fn()
-        self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.sde)
+        self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.path)
         self.model = self.build_model()
         self.train_epoch_end_step_fn = lambda: None
         self.flow = self.load_pretrained_flow_model()
@@ -133,7 +133,7 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
     def sampling(self, n_samples, method="HMC", num_steps=100, step_size=0.1, filename="best", **kwargs):
         with torch.enable_grad():
             z_samples = sampling(
-                self.model, self.sde, self.density_ratio_fn,
+                self.model, self.path, self.density_ratio_fn,
                 n_samples=n_samples, data_shape=self.data_shape,
                 joint=self.joint, method=method,
                 num_steps=num_steps, step_size=step_size,
@@ -165,7 +165,7 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
     def training_step(self, batch, batch_idx):
         batch = batch.to(self.device)
         shape = batch.shape
-        noise = self.sde.prior_sampling(shape).to(batch)
+        noise = self.path.prior_sampling(shape).to(batch)
         batch, log_det_J = self.flow_fn(batch, train=True)
         loss_dict = self.train_step_fn(self.model, (noise, batch), step=self.global_step, log_det_J=log_det_J)
         nll, bpd = self.get_bpd_by_nll(loss_dict["nll"], batch, log_det_J)
@@ -192,12 +192,12 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
 
     def on_validation_epoch_end(self, outputs=None):
         vis_utils.visualize_path_function(
-            self.sde, sample_path=self.sample_path,
+            self.path, sample_path=self.sample_path,
             combination_type=self.args.combination_type,
             constraint_type=self.args.constraint_type
         )
         vis_utils.visualize_variance_profiles(
-            self.sde, sample_path=self.sample_path,
+            self.path, sample_path=self.sample_path,
             combination_type=self.args.combination_type
         )
 

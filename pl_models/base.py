@@ -11,7 +11,7 @@ import torch.optim as optim
 import torchvision.utils as vutils
 from typing import Tuple
 
-from sde import ToyInterpXt, ImageInterpXt
+from path import ToyInterpXt, ImageInterpXt
 import nn_models as base_models
 from estimators import get_likelihood_fn, get_density_ratio_fn, MetricEvaluator
 import losses.losses as train_step_fns
@@ -48,7 +48,7 @@ class DensityEstimationModel(pl.LightningModule):
         return ToyInterpXt(args=args)
 
     def set_basic_functions(self, args):
-        self.sde = self._build_sde(args)
+        self.path = self._build_sde(args)
         self.likelihood_fn = self.get_density_fn()
         self.density_ratio_fn = self.get_dr_fn()
         self.model = self.build_model()
@@ -56,15 +56,15 @@ class DensityEstimationModel(pl.LightningModule):
 
         if self.args.sub_method == "kernel":
             self.train_step_fn = train_step_fns.KernelDensityRatioTrainStepFn(
-                args, sde=self.sde, method=self.subsub_method
+                args, path_model=self.path, method=self.subsub_method
             )
             self.train_epoch_end_step_fn = self.model.train_model
         elif self.args.sub_method == "neural":
             self.train_step_fn = train_step_fns.NeuralDensityRatioTrainStepFn(
-                args, sde=self.sde, method=self.subsub_method
+                args, path_model=self.path, method=self.subsub_method
             )
         elif self.args.sub_method == "score":
-            self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.sde)
+            self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.path)
         else:
             raise ValueError("Invalid sub_method %s" % self.args.sub_method)
 
@@ -72,7 +72,7 @@ class DensityEstimationModel(pl.LightningModule):
         hidden_dims = list(map(int, self.args.dims.split("-")))
         if self.args.sub_method == "kernel":
             return base_models.KernelDensityRatioModel(
-                self.args, sde=self.sde, method=self.subsub_method
+                self.args, path_model=self.path, method=self.subsub_method
             )
         elif self.args.sub_method == "neural":
             return base_models.NeuralDensityRatioModel(
@@ -109,15 +109,15 @@ class DensityEstimationModel(pl.LightningModule):
                 )
 
     def get_density_fn(self):
-        return get_likelihood_fn(self.sde, args=self.args, quad_step=self.args.quad_step)
+        return get_likelihood_fn(self.path, args=self.args, quad_step=self.args.quad_step)
 
     def get_dr_fn(self):
-        return get_density_ratio_fn(self.sde, args=self.args, quad_step=self.args.quad_step)
+        return get_density_ratio_fn(self.path, args=self.args, quad_step=self.args.quad_step)
 
     def sampling(self, n_samples, method="HMC", num_steps=100, step_size=0.1, filename="best", **kwargs):
         with torch.enable_grad():
             samples = sampling(
-                self.model, self.sde, self.density_ratio_fn,
+                self.model, self.path, self.density_ratio_fn,
                 n_samples=n_samples, data_shape=self.data_shape,
                 joint=self.joint, method=method,
                 num_steps=num_steps, step_size=step_size,
@@ -143,7 +143,7 @@ class DensityEstimationModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         noise = torch.randn_like(batch) * self.noise_level if self.noise_level > 0 else 0.
         batch = batch + noise
-        noise = self.sde.prior_sampling(batch.shape).to(batch)
+        noise = self.path.prior_sampling(batch.shape).to(batch)
         loss_dict = self.train_step_fn(self.model, (noise, batch), step=self.global_step)
         self.stage_log("train", loss_dict["loss"], loss_dict["nll"], batch.size(0))
         return loss_dict["loss"]
@@ -235,22 +235,22 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.prepare_batch = prepare_batch
 
     def set_basic_functions(self, args):
-        self.sde = self._build_sde(args)
+        self.path = self._build_sde(args)
         self.density_ratio_fn = self.get_dr_fn()
         self.model = self.build_model()
         self.train_epoch_end_step_fn = lambda: None
 
         if self.args.sub_method == "kernel":
             self.train_step_fn = train_step_fns.KernelDensityRatioTrainStepFn(
-                args, sde=self.sde, method=self.subsub_method
+                args, path_model=self.path, method=self.subsub_method
             )
             self.train_epoch_end_step_fn = self.model.train_model
         elif self.args.sub_method == "neural":
             self.train_step_fn = train_step_fns.NeuralDensityRatioTrainStepFn(
-                args, sde=self.sde, method=self.subsub_method
+                args, path_model=self.path, method=self.subsub_method
             )
         elif self.args.sub_method == "score":
-            self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.sde)
+            self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.path)
         else:
             raise ValueError("Invalid sub_method %s" % self.args.sub_method)
 
@@ -291,14 +291,14 @@ class DensityRatioEstimationModel(pl.LightningModule):
         else:
             hidden_dims = list(map(int, self.args.dims.split("-")))
             return base_models.KernelDensityRatioModel(
-                self.args, sde=self.sde, method=self.subsub_method
+                self.args, path_model=self.path, method=self.subsub_method
             )
 
     def _build_default_model(self):
         hidden_dims = list(map(int, self.args.dims.split("-")))
         if self.args.sub_method == "kernel":
             return base_models.KernelDensityRatioModel(
-                self.args, sde=self.sde, method=self.subsub_method
+                self.args, path_model=self.path, method=self.subsub_method
             )
         elif self.args.sub_method == "neural":
             return base_models.NeuralDensityRatioModel(
@@ -340,7 +340,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
         return self._build_default_model()
 
     def get_dr_fn(self):
-        return get_density_ratio_fn(self.sde, args=self.args, quad_step=self.args.quad_step)
+        return get_density_ratio_fn(self.path, args=self.args, quad_step=self.args.quad_step)
 
     def forward(self, t, x):
         return self.model(t, x)
@@ -410,12 +410,12 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.validation_step_outputs.clear()
         vis_utils.visualize_fdiv(self.args, self.fdiv_db, self.fdiv_true_db, savefig=self.fdiv_path)
         vis_utils.visualize_path_function(
-            self.sde, sample_path=self.sample_path,
+            self.path, sample_path=self.sample_path,
             combination_type=self.args.combination_type,
             constraint_type=self.args.constraint_type
         )
         vis_utils.visualize_variance_profiles(
-            self.sde, sample_path=self.sample_path,
+            self.path, sample_path=self.sample_path,
             combination_type=self.args.combination_type
         )
         with open(os.path.join(self.metrics_dir, "metrics.p"), "wb") as f:
@@ -453,11 +453,11 @@ class DensityRatioEstimationModel(pl.LightningModule):
                 epoch="final"
             )
         vis_utils.visualize_variance_profiles(
-            self.sde, sample_path=self.sample_path,
+            self.path, sample_path=self.sample_path,
             combination_type=self.args.combination_type
         )
         vis_utils.visualize_integrated_variance_profiles(
-            self.sde, sample_path=self.sample_path,
+            self.path, sample_path=self.sample_path,
             combination_type=self.args.combination_type
         )
         for key, value in all_metrics.items():

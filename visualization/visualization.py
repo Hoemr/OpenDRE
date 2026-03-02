@@ -622,16 +622,16 @@ def plot_integral_distributions(model, batch, sample_path, is_integral=False, co
     )
     
 # In[] Illustration for path function
-def visualize_path_function(sde, sample_path="./", combination_type="gpp", constraint_type="spherical"):
+def visualize_path_function(path_model, sample_path="./", combination_type="gpp", constraint_type="spherical"):
     methods = ['linear', 'VPSDE', 'cosine', 'follmer', 'trigonometric']   
     colors = {'linear': 'green', 'VPSDE': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
     labels = {'linear': 'Linear', 'VPSDE': 'VPSDE', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
     
     # get data    
     if combination_type == "gpp":
-        prior_traj = sde.gaussian_process.sample_trajectories(mode="prior")
-        post_traj = sde.gaussian_process.sample_trajectories(mode="posterior")
-        t_grid = sde.gaussian_process.grid
+        prior_traj = path_model.gaussian_process.sample_trajectories(mode="prior")
+        post_traj = path_model.gaussian_process.sample_trajectories(mode="posterior")
+        t_grid = path_model.gaussian_process.grid
         
         pickle_save_path = os.path.join(sample_path, f"trajectories.p")
         with open(pickle_save_path, 'wb') as f:
@@ -646,7 +646,7 @@ def visualize_path_function(sde, sample_path="./", combination_type="gpp", const
     
     method_data = {}
     for m in methods:
-        alpha, beta = sde.get_alpha_t_beta_t(t_grid, combination_type=m)
+        alpha, beta = path_model.get_alpha_t_beta_t(t_grid, combination_type=m)
         method_data[m] = {
             'alpha': alpha.cpu(),
             'beta': beta.cpu()
@@ -678,16 +678,16 @@ def visualize_path_function(sde, sample_path="./", combination_type="gpp", const
         plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0)
         plt.close()
 
-def visualize_variance_profiles(sde, sample_path="./", combination_type="VPSDE"):
+def visualize_variance_profiles(path_model, sample_path="./", combination_type="VPSDE"):
     """
     Generates and saves the plot comparing variance profiles of different schedules.
     """
     fig, ax = plt.subplots(figsize=(8, 6))
     
     if combination_type == "gpp":
-        prior_traj = sde.gaussian_process.sample_trajectories(mode="prior", return_derivs=True)
-        post_traj = sde.gaussian_process.sample_trajectories(mode="posterior", return_derivs=True)
-        t_grid = sde.gaussian_process.grid
+        prior_traj = path_model.gaussian_process.sample_trajectories(mode="prior", return_derivs=True)
+        post_traj = path_model.gaussian_process.sample_trajectories(mode="posterior", return_derivs=True)
+        t_grid = path_model.gaussian_process.grid
         
     else:
         eps = 1e-5  # Time grid, clipped to avoid division by zero in some derivatives (e.g., Follmer)
@@ -699,11 +699,11 @@ def visualize_variance_profiles(sde, sample_path="./", combination_type="VPSDE")
     
     # Baseline methods
     for method in methods:
-        coefficients_fn, derivatives_fn = sde.get_coefficients_and_derivatives_fns(combination_type=method)
+        coefficients_fn, derivatives_fn = path_model.get_coefficients_and_derivatives_fns(combination_type=method)
         alpha, beta = coefficients_fn(t_grid)
         dot_alpha, dot_beta = derivatives_fn(t_grid, alpha, beta)
 
-        variance = sde.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
+        variance = path_model.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
         ax.plot(t_grid.detach().cpu(), variance.view(t_grid.shape).detach().cpu().log(), label=labels[method], color=colors[method], linewidth=2.5)
         
     # gpp method
@@ -712,7 +712,7 @@ def visualize_variance_profiles(sde, sample_path="./", combination_type="VPSDE")
         beta = post_traj["beta"]
         dot_alpha = post_traj["dot_alpha"]
         dot_beta = post_traj["dot_beta"]
-        variance = sde.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
+        variance = path_model.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
         ax.plot(t_grid.detach().cpu(), variance.view(t_grid.shape).detach().cpu().log(), 'r-', lw=2.5, label="MinPV (ours)")
 
     # --- Plot Customization ---
@@ -732,16 +732,16 @@ def visualize_variance_profiles(sde, sample_path="./", combination_type="VPSDE")
     plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
 
-def visualize_integrated_variance_profiles(sde, sample_path="./", combination_type="VPSDE"):
+def visualize_integrated_variance_profiles(path_model, sample_path="./", combination_type="VPSDE"):
     """
     Generates and saves the plot comparing integrated variance profiles of different schedules.
     """
     fig, ax = plt.subplots(figsize=(8, 6))
 
     if combination_type == "gpp":
-        prior_traj = sde.gaussian_process.sample_trajectories(mode="prior", return_derivs=True)
-        post_traj = sde.gaussian_process.sample_trajectories(mode="posterior", return_derivs=True)
-        t_grid = sde.gaussian_process.grid
+        prior_traj = path_model.gaussian_process.sample_trajectories(mode="prior", return_derivs=True)
+        post_traj = path_model.gaussian_process.sample_trajectories(mode="posterior", return_derivs=True)
+        t_grid = path_model.gaussian_process.grid
     else:
         eps = 1e-5
         t_grid = torch.linspace(eps, 1 - eps, 200).view(-1, 1)
@@ -753,11 +753,11 @@ def visualize_integrated_variance_profiles(sde, sample_path="./", combination_ty
     cutoff = 3
     # Baseline methods
     for method in methods:
-        coefficients_fn, derivatives_fn = sde.get_coefficients_and_derivatives_fns(combination_type=method)
+        coefficients_fn, derivatives_fn = path_model.get_coefficients_and_derivatives_fns(combination_type=method)
         alpha, beta = coefficients_fn(t_grid)
         dot_alpha, dot_beta = derivatives_fn(t_grid, alpha, beta)
 
-        variance = sde.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
+        variance = path_model.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
         variance = variance.view(t_grid.shape).detach().cpu()
 
         # Compute cumulative integral using trapezoidal rule
@@ -781,7 +781,7 @@ def visualize_integrated_variance_profiles(sde, sample_path="./", combination_ty
         beta = post_traj["beta"]
         dot_alpha = post_traj["dot_alpha"]
         dot_beta = post_traj["dot_beta"]
-        variance = sde.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
+        variance = path_model.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
         variance = variance.view(t_grid.shape).detach().cpu()
 
         t_tensor = t_grid.squeeze().detach().cpu()

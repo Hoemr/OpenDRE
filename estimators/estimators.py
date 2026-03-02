@@ -65,19 +65,19 @@ def secant_to_tangent(u_theta, xt, dx_dt, l, t, joint=False):
         return s_x, s_t
     return s_t
 
-def get_likelihood_fn(sde, args, quad_step=100):
-    density_ratio_fn = get_density_ratio_fn(sde, args, quad_step)
+def get_likelihood_fn(path_model, args, quad_step=100):
+    density_ratio_fn = get_density_ratio_fn(path_model, args, quad_step)
 
     def likelihood_fn(score_model, x, joint=True, steps=quad_step):
         log_p1_p0, nfe = density_ratio_fn(score_model, x, joint, steps=steps)
-        log_p0 = sde.prior_logp(x)
+        log_p0 = path_model.prior_logp(x)
         assert log_p1_p0.shape == log_p0.shape
         log_p1 = log_p1_p0 + log_p0
         return log_p1, nfe 
 
     def dc_likelihood_fn(score_model, x, joint=True, steps=quad_step):
         log_p1_p0 = score_model.compute_weighted_sum(x)
-        log_p0 = sde.prior_logp(x)
+        log_p0 = path_model.prior_logp(x)
         assert log_p1_p0.shape == log_p0.shape
         log_p1 = log_p1_p0 + log_p0
         nfe = 1
@@ -88,7 +88,7 @@ def get_likelihood_fn(sde, args, quad_step=100):
     else:
         return likelihood_fn
 
-def get_density_ratio_fn(sde, args, quad_step=100):
+def get_density_ratio_fn(path_model, args, quad_step=100):
     rtol=args.rtol
     atol=args.atol
     solver=args.solver

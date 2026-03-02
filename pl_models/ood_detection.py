@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader
-from sde import ImageInterpXt
+from path import ImageInterpXt
 from pl_data import OOD_EVAL_CONFIG
 from .base import DensityRatioEstimationModel
 

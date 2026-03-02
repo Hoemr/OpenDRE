@@ -8,11 +8,11 @@ class KernelDensityRatioTrainStepFn:
     """
     Kernel-based density ratio estimation training step function.
     """
-    def __init__(self, args, sde=None, method='kulsif'):
+    def __init__(self, args, path_model=None, method='kulsif'):
         self.args = args
         self.method = method
         self.reg_param = getattr(args, 'reg_param', 0.1)
-        self.sde = sde
+        self.path = path_model
 
     def __call__(self, model, batch, step=None):
         qx, px = batch
@@ -43,7 +43,7 @@ class KernelDensityRatioTrainStepFn:
             r_px = torch.exp(torch.clamp(log_r_px, min=-5., max=5.))
             loss = torch.mean(r_qx**2) - 2 * torch.mean(r_px)
         nll = -log_r_px.mean()
-        if hasattr(self.sde, 'prior_logp'):
-            prior_terms = self.sde.prior_logp(px)
+        if hasattr(self.path, 'prior_logp'):
+            prior_terms = self.path.prior_logp(px)
             nll = -(log_r_px + prior_terms).mean()
         return loss, nll

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import numpy as np
 import nn_models as base_models
-from sde import ImageInterpXt
+from path import ImageInterpXt
 import losses.losses as train_step_fns
 from .base import DensityRatioEstimationModel
 
@@ -14,9 +14,9 @@ class MIRealDataModel(DensityRatioEstimationModel):
         return ImageInterpXt(args=args)
 
     def set_basic_functions(self, args):
-        self.sde = self._build_sde(args)
+        self.path = self._build_sde(args)
         self.density_ratio_fn = self.get_dr_fn()
-        self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.sde)
+        self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.path)
         self.data_type = args.data
         if self.data_type == "image":
             self.data_shape = self._get_image_shape(args)

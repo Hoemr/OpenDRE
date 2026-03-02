@@ -11,13 +11,12 @@ class KernelDensityRatioModel(nn.Module):
     """
     Parametric density ratio estimation model.
     """
-    def __init__(self, args, sde=None, method='kulsif'):
+    def __init__(self, args, path_model=None, method='kulsif'):
         super().__init__()
         self.args = args
         self.method = method
-        # Initial regularization parameter for KuLSIF (will be overridden by grid search)
-        self.reg_param = getattr(args, 'reg_param', 1.0) 
-        self.sde = sde
+        self.reg_param = getattr(args, 'reg_param', 1.0)
+        self.path_model = path_model
         # Increase the upper limit on the number of training samples
         self.max_samples = getattr(args, 'max_parametric_samples', 2000) 
         

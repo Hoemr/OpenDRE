@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-from .SDE import (
-    SDE,
+from .path_base import (
+    Path,
     ToyInterpXt,
     ImageInterpXt,
     InterpXt,

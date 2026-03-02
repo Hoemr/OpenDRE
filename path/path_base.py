@@ -9,7 +9,7 @@ from functools import partial
 from typing import Union
 import torch.nn.functional as F
 
-from . import bayesian_path as BayesianPath
+from . import bayesian_path as BayesianPath  # noqa: F401
 
 def logit_transform(image, lambd=1e-6):
     image = lambd + (1 - 2 * lambd) * image
@@ -19,16 +19,16 @@ def logit_transform(image, lambd=1e-6):
     return image, ldj
 
 
-class SDE(abc.ABC, torch.nn.Module):  # , torch.nn.Module
-    """SDE abstract class. Functions are designed for a mini-batch of inputs."""
+class Path(abc.ABC, torch.nn.Module):
+    """Path abstract class (ODE or SDE). Functions are designed for a mini-batch of inputs."""
 
     def __init__(self, N):
-        """Construct an SDE.
+        """Construct a path.
 
         Args:
           N: number of discretization time steps.
         """
-        super(SDE, self).__init__()  # nn.Module
+        super(Path, self).__init__()
         abc.ABC.__init__(self)  # ABC
         self.N = N
 
@@ -38,14 +38,15 @@ class SDE(abc.ABC, torch.nn.Module):  # , torch.nn.Module
     @property
     @abc.abstractmethod
     def T(self):
-        """End time of the SDE."""
+        """End time of the path."""
         pass
 
-    def sde(self, x, t):
+    def drift_diffusion(self, x, t):
+        """Drift and diffusion (or ODE velocity). Returns (drift, diffusion)."""
         pass
 
     def marginal_prob(self, x, t):
-        """Parameters to determine the marginal distribution of the SDE, $p_t(x)$."""
+        """Parameters to determine the marginal distribution of the path, $p_t(x)$."""
         pass
 
     @abc.abstractmethod
@@ -67,9 +68,9 @@ class SDE(abc.ABC, torch.nn.Module):  # , torch.nn.Module
         pass
 
     def discretize(self, x, t):
-        """Discretize the SDE in the form: x_{i+1} = x_i + f_i(x_i) + G_i z_i.
+        """Discretize the path in the form: x_{i+1} = x_i + f_i(x_i) + G_i z_i.
 
-        Useful for reverse diffusion sampling and probabiliy flow sampling.
+        Useful for reverse diffusion sampling and probability flow sampling.
         Defaults to Euler-Maruyama discretization.
 
         Args:
@@ -80,13 +81,13 @@ class SDE(abc.ABC, torch.nn.Module):  # , torch.nn.Module
           f, G
         """
         dt = 1 / self.N
-        drift, diffusion = self.sde(x, t)
+        drift, diffusion = self.drift_diffusion(x, t)
         f = drift * dt
         G = diffusion * torch.sqrt(torch.tensor(dt, device=t.device))
         return f, G
 
     def reverse(self, score_fn, probability_flow=False):
-        """Create the reverse-time SDE/ODE.
+        """Create the reverse-time path (ODE or SDE).
 
         Args:
           score_fn: A time-dependent score-based model that takes x and t and returns the score.
@@ -94,11 +95,10 @@ class SDE(abc.ABC, torch.nn.Module):  # , torch.nn.Module
         """
         N = self.N
         T = self.T
-        sde_fn = self.sde
+        drift_diffusion_fn = self.drift_diffusion
         discretize_fn = self.discretize
 
-        # Build the class for reverse-time SDE.
-        class RSDE(self.__class__):
+        class RPath(self.__class__):
             def __init__(self):
                 self.N = N
                 self.probability_flow = probability_flow
@@ -107,9 +107,9 @@ class SDE(abc.ABC, torch.nn.Module):  # , torch.nn.Module
             def T(self):
                 return T
 
-            def sde(self, x, t):
-                """Create the drift and diffusion functions for the reverse SDE/ODE."""
-                drift, diffusion = sde_fn(x, t)
+            def drift_diffusion(self, x, t):
+                """Drift and diffusion for the reverse path."""
+                drift, diffusion = drift_diffusion_fn(x, t)
                 score = score_fn(x, t)
                 # TODO: added this
                 if isinstance(score, list) or isinstance(score, tuple):
@@ -130,7 +130,7 @@ class SDE(abc.ABC, torch.nn.Module):  # , torch.nn.Module
                 rev_G = torch.zeros_like(G) if self.probability_flow else G
                 return rev_f, rev_G
 
-        return RSDE()
+        return RPath()
 
 class OTPlanSampler:
     """OTPlanSampler implements sampling coordinates according to an OT plan (wrt squared Euclidean
@@ -338,7 +338,7 @@ class OTPlanSampler:
         to_return = np.stack(to_return, axis=1)
         return to_return
 
-class InterpXt(SDE):
+class InterpXt(Path):
     def __init__(self, args=None, N=1000, beta_min=0.1, beta_max=20, data_ndim=2):
         super().__init__(N)
         self.args = args
@@ -717,8 +717,8 @@ class InterpXt(SDE):
         squared_sum = torch.sum(z ** 2, dim=tuple(range(1, z.dim())))
         return -0.5 * N * torch.log(2 * torch.tensor(torch.pi, device=z.device, dtype=z.dtype)) - 0.5 * squared_sum
 
-    def sde(self, x, t):
-        raise NotImplementedError("sde method must be implemented in subclass")
+    def drift_diffusion(self, x, t):
+        raise NotImplementedError("drift_diffusion must be implemented in subclass")
     
     def discretize(self, x, t):
         raise NotImplementedError("discretize method must be implemented in subclass")
@@ -754,68 +754,3 @@ class ImageInterpXt(InterpXt):
         alpha_t, beta_t, d_alpha_dt, d_beta_dt = super().get_coefficients_and_derivatives(t)
         return self._reshape_for_image(alpha_t), self._reshape_for_image(beta_t), self._reshape_for_image(d_alpha_dt), self._reshape_for_image(d_beta_dt)
 
-class VPSDE(SDE):
-    def __init__(self, args, beta_min=0.1, beta_max=20, N=1000):
-        """Construct a Variance Preserving SDE.
-
-        Args:
-          beta_min: value of beta(0)
-          beta_max: value of beta(1)
-          N: number of discretization steps
-        """
-        super().__init__(N)
-        self.beta_0 = beta_min
-        self.beta_1 = beta_max
-        self.N = N
-        self.discrete_betas = torch.linspace(beta_min / N, beta_max / N, N)
-        self.alphas = 1. - self.discrete_betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
-        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
-        self.sqrt_1m_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)
-
-    @property
-    def T(self):
-        return 1
-
-    # TODO: ugly code for compatibility with z-space training and x-space training;
-    # make sure to clean this up later
-    def sde(self, x, t):
-        beta_t = self.beta_0 + t * (self.beta_1 - self.beta_0)
-        if len(x.size()) < 4:
-            drift = -0.5 * beta_t[:, None] * x
-        else:
-            drift = -0.5 * beta_t[:, None, None, None] * x
-        diffusion = torch.sqrt(beta_t)
-        return drift, diffusion
-
-    def marginal_prob(self, x, t):
-        log_mean_coeff = -0.25 * t ** 2 * (self.beta_1 - self.beta_0) - 0.5 * t * self.beta_0
-        if len(x.size()) < 4:
-            mean = torch.exp(log_mean_coeff[:, None]) * x
-        else:
-            mean = torch.exp(log_mean_coeff[:, None, None, None]) * x
-        std = torch.sqrt(1. - torch.exp(2. * log_mean_coeff))
-        return mean, std
-
-    def prior_sampling(self, shape):
-        return torch.randn(*shape)
-
-    def prior_logp(self, z):
-        shape = z.shape
-        n = z.size(0)
-        N = np.prod(shape[1:])
-        logps = -N / 2. * np.log(2 * np.pi) - torch.sum(z.view(n, -1) ** 2, dim=-1) / 2.
-        return logps
-
-    def discretize(self, x, t):
-        """DDPM discretization."""
-        timestep = (t * (self.N - 1) / self.T).long()
-        beta = self.discrete_betas.to(x.device)[timestep]
-        alpha = self.alphas.to(x.device)[timestep]
-        sqrt_beta = torch.sqrt(beta)
-        if len(x.size()) < 4:
-            f = torch.sqrt(alpha)[:, None] * x - x
-        else:
-            f = torch.sqrt(alpha)[:, None, None, None] * x - x
-        G = sqrt_beta
-        return f, G

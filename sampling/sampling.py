@@ -105,11 +105,11 @@ def plot_2d_gradient_field(energy_fn, data_shape=(1, 28, 20), device="cpu",
     plt.savefig(save_path, bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-def AIS_sampler(logr_fn, sde, n, data_shape=(1, 28, 28), num_steps=100, step_size=0.1, device="cpu", **kwargs):
+def AIS_sampler(logr_fn, path_model, n, data_shape=(1, 28, 28), num_steps=100, step_size=0.1, device="cpu", **kwargs):
     with torch.no_grad():
         # logr_fn: takes input x and returns log(p_data(x) / p_noise(x))
         # Initialize samples and log-weights
-        x = sde.prior_sampling((n, *data_shape)).to(device)  # Sample from p0
+        x = path_model.prior_sampling((n, *data_shape)).to(device)  # Sample from p0
         dims = list(range(1, x.ndim))
         log_weights = torch.zeros(n).to(x)
         # beta_schedule = torch.linspace(0, 1, num_steps).to(x)  # Annealing schedule
@@ -129,8 +129,8 @@ def AIS_sampler(logr_fn, sde, n, data_shape=(1, 28, 28), num_steps=100, step_siz
             
             # Compute acceptance probability
             log_r_proposal = logr_fn(x_proposal)
-            log_p0 = sde.prior_logp(x)   # log-density of p0 (standard normal)  
-            log_p0_proposal = sde.prior_logp(x_proposal)
+            log_p0 = path_model.prior_logp(x)   # log-density of p0 (standard normal)  
+            log_p0_proposal = path_model.prior_logp(x_proposal)
             
             # Acceptance probability formula (note beta parameterization)
             log_accept = log_p0_proposal + beta * log_r_proposal - (log_p0 + beta * log_r)
@@ -151,16 +151,16 @@ def AIS_sampler(logr_fn, sde, n, data_shape=(1, 28, 28), num_steps=100, step_siz
         torch.cuda.empty_cache()
     return x[indices]  # [n, C, H, W]
 
-def HMC_sampler(logr_fn, sde, n, data_shape=(1, 28, 28), num_steps=500, 
+def HMC_sampler(logr_fn, path_model, n, data_shape=(1, 28, 28), num_steps=500, 
                 step_size=0.1, leapfrog_steps=30, device="cpu", **kwargs):
-    x = sde.prior_sampling((n, *data_shape)).to(device)
+    x = path_model.prior_sampling((n, *data_shape)).to(device)
     target_accept_rate = 0.65
     
     def get_energy_and_grad(x_in):
         x_in = x_in.detach().requires_grad_(True)
         with torch.enable_grad():
             log_r = logr_fn(x_in)
-            log_p0 = sde.prior_logp(x_in)
+            log_p0 = path_model.prior_logp(x_in)
             U = -(log_r + log_p0)
             # create_graph=False 极其重要，我们不需要二阶导
             grad = torch.autograd.grad(U.sum(), x_in, create_graph=False)[0]
@@ -297,11 +297,11 @@ def HMC_sampler(logr_fn, sde, n, data_shape=(1, 28, 28), num_steps=500,
 #         indices = torch.multinomial(weights, n, replacement=True)
 #     return x[indices]
 
-def AIS_sampler_HMC(logr_fn, sde, n, data_shape=(1, 28, 28), num_steps=100, 
+def AIS_sampler_HMC(logr_fn, path_model, n, data_shape=(1, 28, 28), num_steps=100, 
                     leapfrog_steps=10, step_size=0.1, device="cuda", **kwargs):
     
     # 1. Initialize from Prior
-    x = sde.prior_sampling((n, *data_shape)).to(device)
+    x = path_model.prior_sampling((n, *data_shape)).to(device)
     log_weights = torch.zeros(n, device=device)
     
     # Sigmoid schedule for beta (smooth interpolation)
@@ -312,7 +312,7 @@ def AIS_sampler_HMC(logr_fn, sde, n, data_shape=(1, 28, 28), num_steps=100,
     def get_potential_and_grad(x_in, beta):
         x_in = x_in.detach().requires_grad_(True)
         with torch.enable_grad():
-            log_p0 = sde.prior_logp(x_in)
+            log_p0 = path_model.prior_logp(x_in)
             log_r = logr_fn(x_in)
             log_p = log_p0 + beta * log_r
             U = -log_p.sum()
@@ -409,7 +409,7 @@ SAMPLERS = {
     "HMC": HMC_sampler,
 }
 
-def sampling(score_model, sde, logr_fn, n_samples, data_shape, joint=True, 
+def sampling(score_model, path_model, logr_fn, n_samples, data_shape, joint=True, 
              method="AIS", num_steps=100, step_size=0.1, device="cpu", 
              save_dir="", filename="", **kwargs):
     if len(data_shape) == 3:
@@ -447,7 +447,7 @@ def sampling(score_model, sde, logr_fn, n_samples, data_shape, joint=True,
     # Sampling
     sampler = SAMPLERS[method]
     samples = sampler(logr_fn=partial_logr_fn, 
-                   sde=sde,
+                   path_model=path_model,
                    n=n_samples, 
                    data_shape=data_shape, 
                    num_steps=num_steps, 
