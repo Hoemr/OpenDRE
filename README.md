@@ -57,7 +57,7 @@ The codebase is split into top-level packages for easier navigation:
 | `pl_data/` | Lightning DataModules and dataset configs |
 | `losses/` | Training objectives (score matching, kernel/neural DRE) |
 | `estimators/` | Likelihood / density-ratio estimators, quadrature, metrics |
-| `sde/` | SDEs and Bayesian path (SDE.py + bayesian_path.py) |
+| `path/` | Path (ODE/SDE) and Bayesian path (path_base.py, bayesian_path.py) |
 | `pl_models/` | Lightning modules per task |
 | `nsf/` | NSF flows (optional submodule) |
 | `config/` | Argument parsing and save paths |
@@ -66,7 +66,7 @@ The codebase is split into top-level packages for easier navigation:
 | `visualization/` | Plotting and visualization |
 | `core/` | Project helpers (utils.py, data_utils.py, tabular/). Named `core` to avoid shadowing torchquad's `utils`. |
 
-Import examples: `from pl_data import SUBTASK_DATA_MODULES`, `from nn_models import JointScoreModel`, `from config import parse_args`, `from sde import ToyInterpXt`.
+Import examples: `from pl_data import SUBTASK_DATA_MODULES`, `from nn_models import JointScoreModel`, `from config import parse_args`, `from path import ToyInterpXt`.
 
 ## Quick Start
 
@@ -199,555 +199,67 @@ python main.py fdiv_estimation --subtask ood_detection --ood_in_dist cifar10 --i
 
 ---
 
-# Tutorial: Adding New Tasks and Datasets
+# Extending the Framework: Tasks and Datasets
 
-This section provides a step-by-step guide to adding new tasks (e.g., OOD detection) and datasets to OS_DRE.
-
-## Overview of Architecture
-
-OS_DRE uses a modular design with three main components:
+## Pipeline
 
 ```
-main.py → pl_data (DataModule) → pl_models (Model) → training
+main.py → pl_data (DataModule) → pl_models (Lightning module) → training
 ```
 
-1. **main.py**: Entry point, parses arguments and coordinates everything
-2. **pl_data.py**: Defines datasets and DataModule (data loading)
-3. **pl_models.py**: Defines PyTorch Lightning models (training/validation)
-4. **config_setting.py**: Defines task-specific arguments
-5. **base_models.py**: Neural network architectures
+- **main.py**: Entry point and argument parsing.
+- **pl_data/**: DataModules and dataset configs; register in `SUBTASK_DATA_MODULES`.
+- **pl_models/**: Lightning modules per task; register in `SUBTASK_MODLE_MODULES`.
+- **config/**: Task-specific arguments (e.g. `get_fdiv_args`, `get_likelihood_args`).
+- **nn_models/**: Model architectures used by `pl_models` via `build_model()`.
 
-## Tutorial: Adding OOD Detection (Complete Example)
+## Adding a New Task (Checklist)
 
-This is a real example of how OOD detection was added to OS_DRE.
+Use an existing task (e.g. OOD detection in `pl_models/ood_detection.py`, `pl_data/ood_detection.py`) as a template.
 
-### Step 1: Add Dataset to pl_data.py
+| Step | Where | What to do |
+|------|--------|------------|
+| 1 | `config/config_setting.py` | Add arguments in the right `get_*_args()` (e.g. `get_fdiv_args`). |
+| 2 | `pl_data/` | Add dataset name to the task’s list; implement a DataModule and register it in `SUBTASK_DATA_MODULES`. |
+| 3 | `pl_models/` | Add a Lightning module (inherit from `BaseDREMetrics` or the task base); implement `build_model()`, `training_step`, and optionally `validation_step`; register in `SUBTASK_MODLE_MODULES`. |
+| 4 | `main.py` | In the task branch, instantiate your DataModule and Model and pass them to the trainer. |
 
-First, add the dataset name to the appropriate list:
+No need to copy large blocks: open the corresponding file for an existing subtask and mirror its structure (imports, registration keys, method names).
 
-```python
-# In models/pl_data.py
-OOD_DETECTION_DATASETS = ['mnist', 'fashion_mnist', 'cifar10', 'cifar100']
-```
+## Key Conventions
 
-### Step 2: Add Arguments to config_setting.py
+- **Density ratio**: Many tasks use **qx** (reference, e.g. t=0) and **px** (target, e.g. t=1). The model estimates r(x) = px(x) / qx(x). Batch format is often `(qx, px)` or `(x0, x1)`.
+- **New datasets**: For synthetic data, add a generator in `core/` (e.g. `data_utils.py`) and wire it in the task’s DataModule. For tabular/image, add the name to the task list in `pl_data` and implement loading in that DataModule.
+- **Custom losses**: Implement a train-step callable (e.g. `def __call__(self, model, batch, step) -> dict`) and use it in the task’s `set_basic_functions()` / `train_step_fn`. See `losses/score_matching.py`, `losses/kernel_density_ratio.py`, `losses/neural_density_ratio.py` for the expected interface.
 
-Add task-specific arguments in the `get_fdiv_args` function:
+## Model Architecture (nn_models/)
 
-```python
-# In config/config_setting.py
-def get_fdiv_args(parser):
-    # ... existing code ...
-    
-    # OOD detection arguments
-    parser.add_argument('--ood_in_dist', type=str, default='mnist', 
-                       choices=['mnist', 'fashion_mnist', 'cifar10', 'cifar100'],
-                       help='In-distribution dataset for OOD detection')
-    parser.add_argument('--ood_base_type', type=str, default='universal',
-                       choices=['local', 'general', 'universal'],
-                       help='Base distribution type for OOD detection')
-    
-    # Generic image backbone (shared across image tasks)
-    parser.add_argument('--image_backbone', type=str, default='resnet18',
-                       choices=['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'],
-                       help='Backbone network for image-based tasks')
-    parser.add_argument('--image_dropout', type=float, default=0.3,
-                       help='Dropout rate for WideResNet')
-    
-    return parser
-```
+Models live in `nn_models/`: tabular in `tabular_models.py`, image in `image_models.py`, unified API in `unified.py`. Use the existing pl_models’ `build_model()` as the reference for constructor arguments.
 
-### Step 3: Add DataModule to pl_data.py
+| Use case | Tabular | Image |
+|----------|---------|--------|
+| Score s(x,t) | `JointScoreModel`, `DecompJointScoreModel` | `ImageJointScoreModel`, `ImageDecompJointScoreModelResNet` |
+| Density ratio r(x) | `NeuralDensityRatioModel` | `ResNetDensityRatioModel` |
 
-Create a Dataset class and DataModule class for OOD detection:
+Example (tabular score model): `JointScoreModel(input_dim, hidden_dims=[128,128], embed_dim=256, nonlinearity="leakyrelu", args=args)`. For image backbones (ResNet, WideResNet), see `pl_models/ood_detection.py` or `pl_models/density_estimation_real_image.py` for how the pl_model builds the nn_model. Activation and polynomial options are in the docstrings and config; see `nn_models/unified.py` and `layers/activations.py` for details.
 
-```python
-# In models/pl_data.py
-class OODDetectionDataset(Dataset):
-    """
-    Dataset for OOD detection with paired (x_in, x_ood) samples.
-    Used for training density ratio estimators for OOD detection.
-    """
-    def __init__(self, in_dist_dataset, ood_dataset):
-        self.in_dist_dataset = in_dist_dataset
-        self.ood_dataset = ood_dataset
-        # Use the smaller length to ensure paired batches
-        self.num_samples = min(len(in_dist_dataset), len(ood_dataset))
-    
-    def __len__(self):
-        return self.num_samples
-
-    def __getitem__(self, idx):
-        # Get in-distribution sample
-        x_in, _ = self.in_dist_dataset[idx]
-        # Get OOD sample
-        x_ood, _ = self.ood_dataset[idx]
-        return x_in, x_ood
-
-class OutOfDistributionDetectionDataModule(DataModule):
-    """
-    DataModule for Out-of-Distribution (OOD) detection.
-    
-    Supports training density ratio estimators for OOD detection using:
-        - 'local': Cropped-resized in-distribution samples as synthetic OOD
-        - 'general': Different dataset as OOD (e.g., CIFAR-10 vs SVHN)
-        - 'universal': 300K random images (Outlier Exposure)
-    
-    Training returns (x_in, x_ood) pairs where:
-        - x_in: In-distribution samples
-        - x_ood: Out-of-distribution samples
-    """
-    def __init__(self, args):
-        super().__init__(args)
-        self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
-        self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
-        self.ood_noise_std = getattr(args, 'ood_noise_std', 0.1)
-        self.ood_anneal_alpha_init = getattr(args, 'ood_anneal_alpha_init', 0.0)
-        self.ood_crop_size = getattr(args, 'ood_crop_size', 12)
-        
-        # Set num_workers to 0 for simplicity
-        self.num_workers = 0
-        
-    def prepare_data(self):
-        # Download datasets if needed
-        if self.ood_in_dist == 'mnist':
-            dset.MNIST(self.args.data_dir, train=True, download=True)
-            dset.MNIST(self.args.data_dir, train=False, download=True)
-        elif self.ood_in_dist == 'fashion_mnist':
-            dset.FashionMNIST(self.args.data_dir, train=True, download=True)
-            dset.FashionMNIST(self.args.data_dir, train=False, download=True)
-        elif self.ood_in_dist == 'cifar10':
-            dset.CIFAR10(self.args.data_dir, train=True, download=True)
-            dset.CIFAR10(self.args.data_dir, train=False, download=True)
-        elif self.ood_in_dist == 'cifar100':
-            dset.CIFAR100(self.args.data_dir, train=True, download=True)
-            dset.CIFAR100(self.args.data_dir, train=False, download=True)
-
-    def setup(self, stage=None):
-        # Get transforms
-        transform_train = self._get_transform(train=True)
-        transform_test = self._get_transform(train=False)
-        
-        # Get in-distribution dataset
-        in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
-        
-        # Get OOD dataset
-        ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
-        
-        if (stage == "fit" or stage == "validate") or stage is None:
-            self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
-            
-            # Validation: use test set for in-dist, and appropriate OOD
-            in_dist_val = self._get_in_dist_dataset(train=False, transform=transform_test)
-            ood_val = self._get_ood_dataset(train=False, transform=transform_test)
-            self.val_dataset = OODDetectionDataset(in_dist_val, ood_val)
-        
-        if stage == "test" or stage is None:
-            # Test: use test set
-            in_dist_test = self._get_in_dist_dataset(train=False, transform=transform_test)
-            ood_test = self._get_ood_dataset(train=False, transform=transform_test)
-            self.test_dataset = OODDetectionDataset(in_dist_test, ood_test)
-    
-    def _get_transform(self, train=True):
-        """Get transform for in-distribution dataset."""
-        if self.ood_in_dist in ['mnist', 'fashion_mnist']:
-            transform_list = [
-                transforms.Resize(32),
-                transforms.RandomHorizontalFlip() if train else transforms.Lambda(lambda x: x),
-                transforms.ToTensor(),
-                transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.shape[0] == 1 else x),
-            ]
-        else:  # CIFAR
-            transform_list = [
-                transforms.RandomHorizontalFlip() if train else transforms.Lambda(lambda x: x),
-                transforms.ToTensor(),
-            ]
-        
-        return transforms.Compose(transform_list)
-    
-    def _get_crop_transform(self):
-        """Get crop transform for local OOD detection."""
-        from torchvision.transforms.functional import InterpolationMode
-        
-        if self.ood_in_dist in ['mnist', 'fashion_mnist']:
-            return transforms.Compose([
-                transforms.Resize(32),
-                transforms.RandomHorizontalFlip(),
-                transforms.Pad(2),
-                transforms.RandomCrop(32 - self.ood_crop_size),
-                transforms.Resize(32, interpolation=InterpolationMode.BILINEAR),
-                transforms.ToTensor(),
-                transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.shape[0] == 1 else x),
-            ])
-        else:
-            return transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomCrop(32 - self.ood_crop_size),
-                transforms.Resize(32, interpolation=InterpolationMode.BILINEAR),
-                transforms.ToTensor(),
-            ])
-    
-    def _get_in_dist_dataset(self, train=True, transform=None):
-        """Get in-distribution dataset."""
-        if self.ood_in_dist == 'mnist':
-            return dset.MNIST(self.args.data_dir, train=train, download=False, transform=transform)
-        elif self.ood_in_dist == 'fashion_mnist':
-            return dset.FashionMNIST(self.args.data_dir, train=train, download=False, transform=transform)
-        elif self.ood_in_dist == 'cifar10':
-            return dset.CIFAR10(self.args.data_dir, train=train, download=False, transform=transform)
-        elif self.ood_in_dist == 'cifar100':
-            return dset.CIFAR100(self.args.data_dir, train=train, download=False, transform=transform)
-    
-    def _get_ood_dataset(self, train=True, transform=None):
-        """Get OOD dataset based on base_type."""
-        if self.ood_base_type == 'local':
-            # Local: cropped-resized in-distribution as synthetic OOD
-            crop_transform = self._get_crop_transform()
-            return self._get_in_dist_dataset(train=train, transform=crop_transform)
-        
-        elif self.ood_base_type == 'general':
-            # General: first OOD dataset in the list
-            ood_list = {
-                'mnist': 'fashion_mnist',
-                'fashion_mnist': 'mnist',
-                'cifar10': 'svhn',
-                'cifar100': 'svhn',
-            }
-            ood_name = ood_list.get(self.ood_in_dist, 'svhn')
-            return self._get_ood_by_name(ood_name, train=train)
-        
-        elif self.ood_base_type == 'universal':
-            # Universal: 300K random images
-            oe_file = os.path.join(self.args.data_dir, "300K_random_images.npy")
-            return OODRandomImagesDataset(oe_file)
-    
-    def _get_ood_by_name(self, ood_name, train=True):
-        """Get OOD dataset by name."""
-        if ood_name == 'mnist':
-            return dset.MNIST(self.args.data_dir, train=train, download=False, 
-                            transform=self._get_transform(train))
-        elif ood_name == 'fashion_mnist':
-            return dset.FashionMNIST(self.args.data_dir, train=train, download=False,
-                                    transform=self._get_transform(train))
-        elif ood_name == 'cifar10':
-            return dset.CIFAR10(self.args.data_dir, train=train, download=False,
-                               transform=self._get_transform(train))
-        elif ood_name == 'cifar100':
-            return dset.CIFAR100(self.args.data_dir, train=train, download=False,
-                                transform=self._get_transform(train))
-        elif ood_name == 'svhn':
-            return dset.SVHN(self.args.data_dir, split='train' if train else 'test',
-                            download=False, transform=self._get_transform(train))
-        elif ood_name == 'lsun':
-            lsun_path = os.path.join(self.args.data_dir, 'LSUN_resize')
-            return dset.LSUN(lsun_path, transform=self._get_transform(train))
-        elif ood_name == 'celeba':
-            return dset.CelebA(
-                root=self.args.data_dir,
-                split="test" if not train else "train",
-                transform=transforms.Compose([transforms.Resize([32, 32]), transforms.ToTensor()]),
-                download=False,
-            )
-
-
-class OODRandomImagesDataset(Dataset):
-    """Dataset for universal OOD detection using random images."""
-    
-    def __init__(self, npy_file, transform=None):
-        self.data = np.load(npy_file)
-        self.transform = transform
-
-    def __len__(self):
-        return self.data.shape[0]
-
-    def __getitem__(self, idx):
-        img = self.data[idx]
-        
-        # Handle different data formats
-        if isinstance(img, np.ndarray):
-            # Data is in [N, H, W, C] format with values [0, 255]
-            if img.dtype != np.uint8:
-                img = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8)
-            # Convert to tensor
-            img = torch.from_numpy(img).float() / 255.0
-            if img.dim() == 2:  # Grayscale [H, W]
-                img = img.unsqueeze(0).repeat(3, 1, 1)
-            elif img.dim() == 3 and img.shape[0] != 3:  # [H, W, C] format
-                img = img.permute(2, 0, 1)
-        
-        return img, 0
-```
-
-### Step 4: Add Model Class to pl_models.py
-
-Create a model class that inherits from `DensityRatioEstimationModel`:
-
-```python
-# In models/pl_models.py
-class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
-    def __init__(self, args, save_path, datamodule):
-        super().__init__(args, save_path, datamodule)
-        self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
-        self.image_backbone = getattr(args, 'image_backbone', 'resnet18')
-        
-    def build_model(self):
-        # Build ResNet/WideResNet or default model
-        image_backbone = getattr(self.args, 'image_backbone', None)
-        if image_backbone in ['resnet18', 'resnet34', 'resnet50', 'wideresnet28_10']:
-            self.model = base_models.ResNetDensityRatioModel(
-                in_channels=3,
-                num_classes=1,
-                backbone=image_backbone,
-                dropout=getattr(self.args, 'image_dropout', 0.3)
-            )
-        else:
-            # Use default neural network
-            pass
-    
-    def training_step(self, batch, batch_idx):
-        # OOD-specific training logic
-        px, qx, _ = self.prepare_batch(batch)
-        loss_dict = self.train_step_fn(self.model, (qx, px), step=self.global_step)
-        return loss_dict["loss"]
-    
-    def validation_step(self, batch, batch_idx):
-        # Compute and log OOD metrics
-        pass
-```
-
-### Step 5: Register the Model in SUBTASK_MODLE_MODULES
-
-```python
-# In models/pl_models.py
-SUBTASK_MODLE_MODULES = {
-    # ... existing entries ...
-    "ood_detection": OutOfDistributionDetectionModel,
-}
-```
-
-### Step 6: Register DataModule in main.py
-
-```python
-# In main.py
-from pl_data import (
-    # ... existing imports ...
-    OutOfDistributionDetectionDataModule
-)
-
-# In the main() function
-if args.subtask == "ood_detection":
-    datamodule = OutOfDistributionDetectionDataModule(args)
-```
-
-## Key Patterns
-
-### 1. Understanding the Density Ratio Framework
-
-Most tasks in OS_DRE are based on density ratio estimation:
-- **px** (t=1): Target distribution (e.g., in-distribution for OOD)
-- **qx** (t=0): Reference distribution (e.g., noise or OOD samples)
-- The model learns to estimate r(x) = px(x) / qx(x)
-
-### 2. Adding New Datasets
-
-For simple synthetic datasets:
-
-```python
-# In core/data_utils.py
-class NewDatasetGenerator(Generator):
-    def generate(self, n_samples, **kwargs):
-        # Generate samples from your distribution
-        return samples
-```
-
-For real datasets, add to the appropriate list in `pl_data.py` and implement the loading logic.
-
-### 3. Custom Loss Functions
-
-If you need a custom loss, add it to `losses/losses.py`:
-
-```python
-class CustomDensityRatioTrainStepFn:
-    def __init__(self, args, sde, method):
-        self.args = args
-        self.sde = sde
-        self.method = method
-        
-    def __call__(self, model, batch, step):
-        qx, px = batch
-        # Your custom training logic
-        return {"loss": loss, "nll": nll}
-```
-
-## Model Architecture
-
-This section describes the neural network architectures available in `nn_models/` (e.g. `unified.py`, `tabular_models.py`, `image_models.py`) and how to use them.
-
-### Overview
-
-The framework uses a unified model architecture that supports both tabular and image data with different backbone networks. The `UnifiedModel` class provides a flexible foundation that handles various model types through configurable parameters.
-
-### Model Types
-
-| Model Type | Description | Use Case |
-|------------|-------------|----------|
-| `joint_score` | Joint score estimation s(x,t) | Time-dependent score matching |
-| `decomp_joint_score` | Decomposed joint score with polynomial basis | Scalable score decomposition |
-| `density_ratio` | Direct density ratio estimation r(x) | Density ratio estimation |
-
-### Data Types
-
-| Data Type | Backbone | Description |
-|-----------|----------|-------------|
-| `tabular` | MLP | Multi-layer perceptron for tabular data |
-| `image` | UNet, ResNet, WideResNet | Various architectures for image data |
-
-### Available Model Classes
-
-#### Tabular Data Models
-
-```python
-from nn_models import JointScoreModel, NeuralDensityRatioModel
-
-# For time-dependent score estimation (joint score)
-model = JointScoreModel(
-    input_dim=10,          # Input dimension
-    hidden_dims=[128, 128, 128],  # Hidden layer dimensions
-    embed_dim=256,         # Time embedding dimension
-    nonlinearity="leakyrelu",
-    args=args              # Configuration args
-)
-
-# For direct density ratio estimation
-model = NeuralDensityRatioModel(
-    input_dim=10,
-    hidden_dims=[128, 128, 128],
-    nonlinearity="leakyrelu",
-    args=args
-)
-```
-
-#### Image Data Models
-
-```python
-from nn_models import (
-    ImageJointScoreModel,
-    ImageDecompJointScoreModel,
-    ImageJointScoreModelResNet,
-    ImageDecompJointScoreModelResNet,
-    ResNetDensityRatioModel
-)
-
-# UNet-based models
-model = ImageJointScoreModel(
-    args=args,
-    in_channels=3,
-    hidden_channels=[32, 64, 128, 256],
-    embed_dim=128
-)
-
-# UNet with score decomposition
-model = ImageDecompJointScoreModel(
-    args=args,
-    in_channels=3,
-    hidden_channels=[32, 64, 128, 256],
-    embed_dim=128,
-    K=300,  # Number of polynomial components
-    polynomials="gaussrbf"
-)
-
-# ResNet-based models (recommended for CIFAR-10/100)
-model = ImageJointScoreModelResNet(
-    args=args,
-    in_channels=3,
-    hidden_channels=[64, 128, 256, 512],
-    embed_dim=128,
-    backbone='resnet18',  # or 'resnet34', 'resnet50', 'wideresnet28_10'
-    dropout=0.3
-)
-
-# ResNet with score decomposition
-model = ImageDecompJointScoreModelResNet(
-    args=args,
-    in_channels=3,
-    hidden_channels=[64, 128, 256, 512],
-    embed_dim=128,
-    K=300,
-    backbone='resnet18',
-    dropout=0.3
-)
-
-# Density ratio estimation with ResNet (for OOD detection)
-model = ResNetDensityRatioModel(
-    in_channels=3,
-    num_classes=1,
-    backbone='resnet18',  # or 'wideresnet28_10' for CIFAR
-    dropout=0.3
-)
-```
-
-### UnifiedModel API
-
-For advanced usage, you can directly use the `UnifiedModel` class:
-
-```python
-from nn_models import UnifiedModel
-
-model = UnifiedModel(
-    model_type='joint_score',      # 'joint_score', 'decomp_joint_score', 'density_ratio'
-    data_type='image',             # 'tabular' or 'image'
-    backbone='resnet18',            # 'mlp', 'unet', 'resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'
-    in_channels=3,
-    hidden_channels=[64, 128, 256, 512],
-    embed_dim=128,
-    K=300,                         # For decomposition models
-    nonlinearity="leakyrelu",
-    polynomials="gaussrbf",        # For decomposition models
-    args=args,
-    dropout=0.3
-)
-```
-
-### Backward Compatibility
-
-All original model classes are preserved as convenience wrappers around `UnifiedModel`. Existing code will continue to work without any changes:
-
-```python
-# This still works exactly as before
-model = JointScoreModel(input_dim=10, hidden_dims=[128, 128], args=args)
-output = model(t, x)  # Returns (s_x, s_t) for joint=True
-```
-
-### Configuration Options
-
-#### Activation Functions
-Available options: `tanh`, `relu`, `leakyrelu`, `gelu`, `silu`, `elu`, `selu`, `prelu`, `swish`, `dyt`, `truncleakyrelu`, `truncgelu`, `truncelu`
-
-#### Polynomial Types (for decomposition)
-Available options: `gaussianrbf`, `imq`, `linear`, `polynomial`, `hermite`, `legendre`
-
-### Architecture
+## Directory Layout
 
 ```
 OS_DRE/
-├── main.py                    # Unified entry point
-├── models/
-│   ├── base_models.py         # Core neural network architectures (UnifiedModel + wrappers)
-│   ├── SDE.py                 # SDE/ODE solvers (VPSDE, subVPSDE, Bridge)
-│   ├── estimators.py          # Likelihood & density ratio estimators
-│   ├── losses.py              # Training loss functions
-│   ├── ncsn_unet.py          # Score-based UNet architecture
-│   ├── layers.py              # Neural network layers (including ResNet, WideResNet)
-│   ├── pl_models.py           # PyTorch Lightning wrappers
-│   ├── pl_data.py             # Data modules
-│   └── nsf/                   # Neural Spline Flows integration
-├── core/
-│   ├── config_setting.py      # Argument parsing & configuration
-│   ├── data_utils.py          # Data generators
-│   ├── sampling.py            # Sampling methods (HMC, AIS)
-│   ├── visualization.py       # Plotting utilities
-│   └── logger.py              # Logging utilities
-└── results/                   # Experiment outputs
+├── main.py
+├── config/           # Argument parsing (e.g. config_setting.py)
+├── pl_data/          # DataModules and dataset configs
+├── pl_models/        # Lightning modules per task
+├── nn_models/        # Model architectures (UnifiedModel, JointScore, ResNet DRE, etc.)
+├── path/             # Path (ODE/SDE), Bayesian path
+├── losses/           # Score matching, kernel/neural DRE losses
+├── estimators/       # Likelihood and density-ratio estimators
+├── sampling/         # Sampling routines
+├── visualization/    # Plotting
+├── layers/           # Custom layers, activations
+├── core/             # Utils, data_utils, logger
+└── nsf/              # Optional NSF flows
 ```
 
 
