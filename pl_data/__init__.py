@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 from .base import DataModule, IterDataModule
 
-from .likelihood import (
+from .density_estimation import (
     TABULAR_DATASETS,
     SYNTHETIC2D_DATASETS,
     TabularDataModule,
     Synthetic2DIterDataModule,
 )
-from .image import REAL_IMAGE_DATASETS, SPECS, DATA_SHAPES, RealImageDataModule
+from .density_estimation_image import REAL_IMAGE_DATASETS, SPECS, DATA_SHAPES, RealImageDataModule
 from .distribution_shift import DISTRIBUTION_SHIFT_DATASETS, DistributionShiftIterDataModule
 from .mutual_information import MI_DATASETS, MutualInformationIterDataModule, MutualInformationDataModule
 from .mi_real import MI_REAL_DATASETS, MIRealDataModule
 from .two_sample_test import TwoSampleTestIterDataModule
-from .change_point import CHANGEPOINT_DATASETS, ChangePointDetectionDataModule
+from .change_point_detection import CHANGEPOINT_DATASETS, ChangePointDetectionDataModule
 from .ood_detection import (
     OOD_IN_DIST_DATASETS,
     OOD_BASE_TYPES,
