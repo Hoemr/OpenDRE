@@ -16,15 +16,15 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from models.SDE import ToyInterpXt, ImageInterpXt
-import models.base_models as base_models
-from models.estimators import get_likelihood_fn, get_density_ratio_fn, MetricEvaluator
-import models.losses as train_step_fns
+from sde import ToyInterpXt, ImageInterpXt
+import nn_models as base_models
+from estimators import get_likelihood_fn, get_density_ratio_fn, MetricEvaluator
+import losses.losses as train_step_fns
 
-from .pl_data import SPECS, DATA_SHAPES
-import utils.visualization as vis_utils
-from utils.sampling import sampling
-from .pl_data import OOD_EVAL_CONFIG
+from pl_data import SPECS, DATA_SHAPES
+import visualization.visualization as vis_utils
+from sampling import sampling
+from pl_data import OOD_EVAL_CONFIG
 
 
 class DensityEstimationModel(pl.LightningModule):
@@ -313,10 +313,10 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
                 
     def load_pretrained_flow_model(self,):
         import pickle
-        from models.nsf.experiments.images_noise import create_transform
-        from models.nsf.nde import distributions, transforms, flows
-        
-        with open(os.path.join("models/nsf", 'flow_ckpts', 'test_data_stats.p'), 'rb') as fp:
+        from nsf.experiments.images_noise import create_transform
+        from nsf.nde import distributions, transforms, flows
+
+        with open(os.path.join("nsf", 'flow_ckpts', 'test_data_stats.p'), 'rb') as fp:
             data_stats = pickle.load(fp)
 
         device = self.args.device

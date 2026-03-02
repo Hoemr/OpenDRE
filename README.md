@@ -34,7 +34,7 @@ conda activate os_dre
 pip install -r requirements.txt
 
 # For NSF flows (optional, for real image experiments)
-cd models/nsf && pip install -e .
+cd nsf && pip install -e .
 ```
 
 ### Requirements
@@ -44,6 +44,29 @@ cd models/nsf && pip install -e .
 - PyTorch Lightning 2.1.2+
 - torchdiffeq, torchquad
 - See `requirements.txt` for full list
+
+## Project structure (flat packages, no `models/`)
+
+The codebase is split into top-level packages for easier navigation:
+
+| Package | Contents |
+|---------|----------|
+| `nn_models/` | Neural network models (UnifiedModel, JointScore, ResNet DRE, etc.) |
+| `layers/` | Building blocks: custom layers (`layers.py`), activations (`activations.py`) |
+| `polynomials/` | Polynomial basis (e.g. for score decomposition) |
+| `pl_data/` | Lightning DataModules and dataset configs |
+| `losses/` | Training objectives (score matching, kernel/neural DRE) |
+| `estimators/` | Likelihood / density-ratio estimators, quadrature, metrics |
+| `sde/` | SDEs and Bayesian path (SDE.py + bayesian_path.py) |
+| `pl_models/` | Lightning modules per task |
+| `nsf/` | NSF flows (optional submodule) |
+| `config/` | Argument parsing and save paths |
+| `logger/` | Logging utilities |
+| `sampling/` | Sampling routines |
+| `visualization/` | Plotting and visualization |
+| `core/` | Project helpers (utils.py, data_utils.py, tabular/). Named `core` to avoid shadowing torchquad's `utils`. |
+
+Import examples: `from pl_data import SUBTASK_DATA_MODULES`, `from nn_models import JointScoreModel`, `from config import parse_args`, `from sde import ToyInterpXt`.
 
 ## Quick Start
 
@@ -212,7 +235,7 @@ OOD_DETECTION_DATASETS = ['mnist', 'fashion_mnist', 'cifar10', 'cifar100']
 Add task-specific arguments in the `get_fdiv_args` function:
 
 ```python
-# In utils/config_setting.py
+# In config/config_setting.py
 def get_fdiv_args(parser):
     # ... existing code ...
     
@@ -506,7 +529,7 @@ SUBTASK_MODLE_MODULES = {
 
 ```python
 # In main.py
-from models.pl_data import (
+from pl_data import (
     # ... existing imports ...
     OutOfDistributionDetectionDataModule
 )
@@ -530,7 +553,7 @@ Most tasks in OS_DRE are based on density ratio estimation:
 For simple synthetic datasets:
 
 ```python
-# In utils/data_utils.py
+# In core/data_utils.py
 class NewDatasetGenerator(Generator):
     def generate(self, n_samples, **kwargs):
         # Generate samples from your distribution
@@ -541,7 +564,7 @@ For real datasets, add to the appropriate list in `pl_data.py` and implement the
 
 ### 3. Custom Loss Functions
 
-If you need a custom loss, add it to `models/losses.py`:
+If you need a custom loss, add it to `losses/losses.py`:
 
 ```python
 class CustomDensityRatioTrainStepFn:
@@ -558,7 +581,7 @@ class CustomDensityRatioTrainStepFn:
 
 ## Model Architecture
 
-This section describes the neural network architectures available in `base_models.py` and how to use them.
+This section describes the neural network architectures available in `nn_models/` (e.g. `unified.py`, `tabular_models.py`, `image_models.py`) and how to use them.
 
 ### Overview
 
@@ -584,7 +607,7 @@ The framework uses a unified model architecture that supports both tabular and i
 #### Tabular Data Models
 
 ```python
-from models.base_models import JointScoreModel, NeuralDensityRatioModel
+from nn_models import JointScoreModel, NeuralDensityRatioModel
 
 # For time-dependent score estimation (joint score)
 model = JointScoreModel(
@@ -607,7 +630,7 @@ model = NeuralDensityRatioModel(
 #### Image Data Models
 
 ```python
-from models.base_models import (
+from nn_models import (
     ImageJointScoreModel,
     ImageDecompJointScoreModel,
     ImageJointScoreModelResNet,
@@ -668,7 +691,7 @@ model = ResNetDensityRatioModel(
 For advanced usage, you can directly use the `UnifiedModel` class:
 
 ```python
-from models.base_models import UnifiedModel
+from nn_models import UnifiedModel
 
 model = UnifiedModel(
     model_type='joint_score',      # 'joint_score', 'decomp_joint_score', 'density_ratio'
@@ -718,7 +741,7 @@ OS_DRE/
 │   ├── pl_models.py           # PyTorch Lightning wrappers
 │   ├── pl_data.py             # Data modules
 │   └── nsf/                   # Neural Spline Flows integration
-├── utils/
+├── core/
 │   ├── config_setting.py      # Argument parsing & configuration
 │   ├── data_utils.py          # Data generators
 │   ├── sampling.py            # Sampling methods (HMC, AIS)

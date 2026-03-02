@@ -6,9 +6,9 @@ import torch.autograd as autograd
 import torch.nn.functional as F
 import math
 
-from utils.utils import divergence_approx, jacobian_frobenius_divergence_approx
-from . import bayesian_path as BayesianPath
-from .estimators import secant_to_tangent
+from core.utils import divergence_approx, jacobian_frobenius_divergence_approx
+from sde import bayesian_path as BayesianPath
+from estimators.estimators import secant_to_tangent
 
 def stopgrad(x):
     return x.detach()

@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, IterableDataset, Dataset, random_split
 from scipy.io import loadmat
 from PIL import Image
 
-from utils import data_utils
+from core import data_utils
 
 # In[]
 class DataModule(pl.LightningDataModule, ABC):

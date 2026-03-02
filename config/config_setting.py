@@ -2,12 +2,12 @@
 import argparse
 import torch
 
-from models import base_models
-from models import polynomials as Pk
+from layers.activations import NONLINEARITIES
+import polynomials.polynomials as Pk
 
-import models.pl_data as pl_data
-from models.pl_data import REAL_IMAGE_DATASETS, TABULAR_DATASETS, SYNTHETIC2D_DATASETS
-from models.estimators import SOLVER_DICT, QUAD_DICT, SOLVER_DICT_SCIPY
+import pl_data.pl_data as pl_data
+from pl_data import REAL_IMAGE_DATASETS, TABULAR_DATASETS, SYNTHETIC2D_DATASETS
+from estimators import SOLVER_DICT, QUAD_DICT, SOLVER_DICT_SCIPY
 
 SOLVERS = [*SOLVER_DICT_SCIPY.keys(), *SOLVER_DICT.keys(), *QUAD_DICT.keys()]
 SUB_METHODS = ["score", "neural", "kernel"]
@@ -26,7 +26,7 @@ def get_common_args(parser):
     parser.add_argument('--nhidden', type=int, default=5)
     parser.add_argument('--hdim_factor', type=int, default=5)
     parser.add_argument("--time_act", type=str, default="identity")
-    parser.add_argument("--nonlinearity", type=str, default="leakyrelu", choices=base_models.NONLINEARITIES)
+    parser.add_argument("--nonlinearity", type=str, default="leakyrelu", choices=NONLINEARITIES)
     parser.add_argument('--num_time_head', type=int, default=1)  # 3
     parser.add_argument('--num_data_head', type=int, default=1)  # 2
     parser.add_argument("--norm", type=eval, default=True, choices=[True, False])

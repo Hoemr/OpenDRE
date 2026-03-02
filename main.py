@@ -8,12 +8,12 @@ import torchvision.utils as vutils
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
-from models.pl_data import SUBTASK_DATA_MODULES
-from models.pl_models import SUBTASK_MODLE_MODULES
+from pl_data import SUBTASK_DATA_MODULES
+from pl_models import SUBTASK_MODLE_MODULES
 
-from utils.config_setting import parse_args, get_save_path
-from utils.utils import set_random_seeds, makedirs
-import utils.logger as logger_utils
+from config import parse_args, get_save_path
+from core.utils import set_random_seeds, makedirs
+import logger.logger as logger_utils
 
 import warnings
 warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument.*")
