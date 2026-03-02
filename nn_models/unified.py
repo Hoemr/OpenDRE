@@ -11,7 +11,7 @@ import layers.layers as Layers
 import polynomials.polynomials as Pk
 from pl_data import DATA_SHAPES
 from layers.activations import NONLINEARITIES, INIT_METHODS, ACTIVATION_TYPE_MAP, ConvNormSilu
-from .blocks import FusedConvBlock
+from layers.blocks import FusedConvBlock
 class UnifiedModel(nn.Module):
     """
     A unified model that can handle both image and non-image data with different architectures and tasks.

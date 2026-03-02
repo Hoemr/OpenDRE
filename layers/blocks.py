@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from layers.activations import ConvNormSilu
+from .activations import ConvNormSilu
 from core.utils import divergence_approx, divergence_bf, sample_gaussian_like, sample_rademacher_like
 
 

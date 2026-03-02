@@ -10,6 +10,6 @@ from .image_models import (
     ImageDecompJointScoreModelResNet,
     ResNetDensityRatioModel,
 )
-from .blocks import FusedConvBlock, ODEfunc
+from layers.blocks import FusedConvBlock, ODEfunc
 from .cnf_net import cnf_net
 from .kernel_dre import KernelDensityRatioModel

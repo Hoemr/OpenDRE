@@ -5,7 +5,7 @@ import torch
 from layers.activations import NONLINEARITIES
 import polynomials.polynomials as Pk
 
-import pl_data.pl_data as pl_data
+import pl_data
 from pl_data import REAL_IMAGE_DATASETS, TABULAR_DATASETS, SYNTHETIC2D_DATASETS
 from estimators import SOLVER_DICT, QUAD_DICT, SOLVER_DICT_SCIPY
 

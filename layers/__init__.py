@@ -13,3 +13,4 @@ from .activations import (
     TruncatedELU,
     ConvNormSilu,
 )
+from .blocks import FusedConvBlock, ODEfunc
