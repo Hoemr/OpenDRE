@@ -14,6 +14,7 @@ Score-based generative modeling has emerged as a powerful paradigm for learning 
 - **Continuous Normalizing Flows**: ODE-based likelihood computation
 - **Image Backbones**: ResNet-18/34/50, WideResNet-28-10 for image-based tasks
 
+
 ### Key Features
 
 - 🚀 **Unified Interface**: Single entry point (`main.py`) for all tasks and methods
