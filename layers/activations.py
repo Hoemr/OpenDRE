@@ -186,3 +186,12 @@ INIT_METHODS = {
 
 # for efficiency
 ACTIVATION_TYPE_MAP = {type(act): name for name, act in NONLINEARITIES.items()}
+
+
+def weights_init(m):
+    """Initialize Linear/Conv weights and bias (used by HyperLinear, HyperConv2d)."""
+    classname = m.__class__.__name__
+    if classname.find("Linear") != -1 or classname.find("Conv") != -1:
+        init.constant_(m.weight, 0)
+        if hasattr(m, "bias") and m.bias is not None:
+            init.normal_(m.bias, 0, 0.01)
