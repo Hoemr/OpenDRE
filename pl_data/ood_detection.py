@@ -22,6 +22,26 @@ OOD_EVAL_CONFIG = {
 }
 
 # Imglist/OpenOOD layout configs.
+# These define the file paths for ID and OOD datasets in the OpenOOD format.
+#
+# ================================================================================
+# DATA FLOW SUMMARY FOR CIFAR-10
+# ================================================================================
+#
+# TRAINING (training_step):
+#   - px (ID):   train_cifar10.txt (50,000 CIFAR-10 training images)
+#   - qx (OOD):  val_tin.txt (TinyImageNet validation as OOD proxy)
+#   - Returns: (px, qx, 0.0) pairs for density ratio estimation
+#
+# VALIDATION/TEST (_evaluate_ood):
+#   - ID:  Same as training ID (train_cifar10.txt)
+#   - OOD: Multiple datasets for evaluation:
+#     - near-OOD: val (TIN-val), cifar100, tin (TIN-test)
+#     - far-OOD:  mnist, svhn
+#   - Computes: AUROC, FPR95, AUPR-IN, AUPR-OUT, ACC per OOD dataset
+#
+# ================================================================================
+
 OOD_IMGLIST_NORMALIZATION = {
     "cifar10": ([0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616]),
     "cifar100": ([0.5071, 0.4867, 0.4408], [0.2675, 0.2565, 0.2761]),
@@ -34,20 +54,29 @@ OOD_IMGLIST_BENCHMARKS = {
         "num_classes": 10,
         "image_size": 32,
         "normalization_type": "cifar10",
-        "list_subdir": "benchmark_imglist",
-        "image_subdir": "images_classic",
+        "list_subdir": "benchmark_imglist",    # Directory containing txt files
+        "image_subdir": "images_classic",       # Directory containing images
+        # ===== ID DATASETS (in-distribution) =====
+        # Used for training (px) and evaluation (ID reference)
         "id": {
-            "train": "cifar10/train_cifar10.txt",
-            "val": "cifar10/val_cifar10.txt",
-            "test": "cifar10/test_cifar10.txt",
+            "train": "cifar10/train_cifar10.txt",   # 50,000 ID training images
+            "val": "cifar10/val_cifar10.txt",       # ID validation (subset of train)
+            "test": "cifar10/test_cifar10.txt",     # 10,000 ID test images
         },
-        "ood_train": "cifar10/val_tin.txt",
+        # ===== OOD TRAINING DATA (for training_step) =====
+        # This is qx in the (px, qx) training pairs
+        # Use "random" to use 300K random images (no data leakage with eval OOD)
+        # Previously used "cifar10/val_tin.txt" which caused data leakage
+        "ood_train": "random",
+        "ood_train_random_file": "300K_random_images.npy",  # Used when ood_train="random"
+        # ===== OOD EVALUATION DATA (for validation_step/test_step) =====
+        # Used to compute AUROC, FPR95, etc. in _evaluate_ood()
+        # Ordered by: near-OOD first, then far-OOD
         "ood_eval": [
-            ("val", "cifar10/val_tin.txt"),
-            ("cifar100", "cifar10/test_cifar100.txt"),
-            ("tin", "cifar10/test_tin.txt"),
-            ("mnist", "cifar10/test_mnist.txt"),
-            ("svhn", "cifar10/test_svhn.txt"),
+            ("cifar100", "cifar10/test_cifar100.txt"), # CIFAR-100 test (near-OOD)
+            ("tin", "cifar10/test_tin.txt"),         # TinyImageNet test (near-OOD)
+            ("mnist", "cifar10/test_mnist.txt"),     # MNIST test (far-OOD)
+            ("svhn", "cifar10/test_svhn.txt"),       # SVHN test (far-OOD)
         ],
     },
     "cifar100": {
@@ -61,9 +90,9 @@ OOD_IMGLIST_BENCHMARKS = {
             "val": "cifar100/val_cifar100.txt",
             "test": "cifar100/test_cifar100.txt",
         },
-        "ood_train": "cifar100/val_tin.txt",
+        "ood_train": "random",
+        "ood_train_random_file": "300K_random_images.npy",
         "ood_eval": [
-            ("val", "cifar100/val_tin.txt"),
             ("cifar10", "cifar100/test_cifar10.txt"),
             ("tin", "cifar100/test_tin.txt"),
             ("mnist", "cifar100/test_mnist.txt"),
@@ -72,9 +101,12 @@ OOD_IMGLIST_BENCHMARKS = {
     },
 }
 
+# Near-OOD vs Far-OOD classification (for reporting separate AUROC)
+# - near-OOD: distributionally similar to ID (e.g., CIFAR-100 vs CIFAR-10)
+# - far-OOD: distributionally different from ID (e.g., MNIST vs CIFAR-10)
 OOD_IMGLIST_NEAR_FAR = {
-    "cifar10": {"near": ["val", "cifar100", "tin"], "far": ["mnist", "svhn"]},
-    "cifar100": {"near": ["val", "cifar10", "tin"], "far": ["mnist", "svhn"]},
+    "cifar10": {"near": ["cifar100", "tin"], "far": ["mnist", "svhn"]},
+    "cifar100": {"near": ["cifar10", "tin"], "far": ["mnist", "svhn"]},
 }
 
 OOD_IMGLIST_IN_DIST_CHOICES = list(OOD_IMGLIST_BENCHMARKS.keys())
@@ -136,16 +168,33 @@ class ConcatDataset(Dataset):
 
 
 class OODDetectionDataset(Dataset):
+    """
+    Training dataset for OOD detection via density ratio estimation.
+    
+    This is the dataset used in training_step.
+    
+    Each sample returns: (px, qx, true_fdiv)
+    - px: ID image (in-distribution)
+    - qx: OOD image (out-of-distribution)
+    - true_fdiv: placeholder value (always 0.0)
+    
+    IMPORTANT: 
+    - OOD image (qx) is randomly sampled for each ID image (px)
+    - This means the same ID image will be paired with different OOD images across epochs
+    """
+    
     def __init__(self, in_dist_dataset, ood_dataset):
-        self.in_dist_dataset = in_dist_dataset
-        self.ood_dataset = ood_dataset
+        self.in_dist_dataset = in_dist_dataset  # ID dataset (px)
+        self.ood_dataset = ood_dataset          # OOD dataset (qx)
         self.num_samples = len(in_dist_dataset)
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx):
+        # Get ID image (px) at fixed index
         x_in, _ = self.in_dist_dataset[idx]
+        # Get OOD image (qx) at RANDOM index (different each time!)
         ood_idx = random.randint(0, len(self.ood_dataset) - 1)
         x_ood, _ = self.ood_dataset[ood_idx]
         return x_in, x_ood, torch.tensor(0.0)
@@ -204,18 +253,78 @@ def _join_data_dir(data_dir, *parts):
 
 
 class OutOfDistributionDetectionDataModule(DataModule):
+    """
+    OOD Detection DataModule for density ratio estimation.
+    
+    ================================================================================
+    DATA FLOW FOR TRAINING AND VALIDATION
+    ================================================================================
+    
+    1. TRAINING DATA (used in training_step)
+       ----------------
+       - self.train_dataset: OODDetectionDataset instance
+         - Returns (px, qx, true_fdiv) where:
+           - px: ID image (from train split of ID dataset)
+           - qx: OOD image (from train OOD dataset)
+           - true_fdiv: always 0.0 (placeholder)
+       - Source: _setup_imglist() or setup() creates this
+       - ID data:   cifar10/train_cifar10.txt → images_classic/
+       - OOD data:  cifar10/val_tin.txt → images_classic/  (TinyImageNet validation)
+    
+    2. VALIDATION DATA (used in validation_step → _evaluate_ood)
+       ----------------
+       - ID: self.train_dataset.in_dist_dataset (same as training ID)
+       - OOD: self.eval_ood_datasets (list of OOD datasets for evaluation)
+         - val:   cifar10/val_tin.txt (TinyImageNet validation)
+         - cifar100: cifar10/test_cifar100.txt
+         - tin:     cifar10/test_tin.txt
+         - mnist:   cifar10/test_mnist.txt
+         - svhn:    cifar10/test_svhn.txt
+       - Near-OOD vs Far-OOD:
+         - near: [val, cifar100, tin]  (similar distribution)
+         - far:  [mnist, svhn]         (different distribution)
+    
+    3. TEST DATA (used in test_step → _evaluate_ood)
+       ----------------
+       - ID: self._get_in_dist_dataset(train=True) (same as training ID)
+       - OOD: self.eval_ood_datasets (same as validation)
+    
+    ================================================================================
+    KEY ATTRIBUTES (set by _setup_imglist)
+    ================================================================================
+    
+    - self.train_dataset:          OODDetectionDataset for training
+    - self.train_dataset.in_dist_dataset: ID dataset (used for val/test ID)
+    - self.eval_ood_names:         List of OOD dataset names for evaluation
+    - self.eval_ood_datasets:      List of OOD datasets for evaluation
+    - self._id_datasets:           Dict of ID datasets {train, val, test}
+    
+    ================================================================================
+    """
+    
     def __init__(self, args):
         super().__init__(args)
+        
+        # ===== OOD Configuration =====
         self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
         self.ood_use_imglist = getattr(args, 'ood_use_imglist', False)
         self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
         self.ood_crop_size = getattr(args, 'ood_crop_size', 12)
         self.num_workers = 0
-        self.eval_ood_names = []
-        self.eval_ood_datasets = []
+        
+        # ===== EVALUATION OOD DATASETS (for validation/test) =====
+        # These are set by _setup_imglist() and used in _evaluate_ood()
+        self.eval_ood_names = []      # e.g., ['val', 'cifar100', 'tin', 'mnist', 'svhn']
+        self.eval_ood_datasets = []   # corresponding dataset objects
+        
+        # ===== ID DATASETS =====
+        # Set by _setup_imglist(): {'train': ..., 'val': ..., 'test': ...}
         self._id_datasets = {}
+        
+        # ===== BENCHMARK CONFIG =====
         self._bench = OOD_IMGLIST_BENCHMARKS.get(self.ood_in_dist)
         self.num_classes = 0
+        
         if self.ood_use_imglist and self.ood_in_dist not in OOD_IMGLIST_BENCHMARKS:
             raise ValueError(
                 "ood_in_dist=%s not in OOD_IMGLIST_BENCHMARKS. Choices: %s"
@@ -223,6 +332,7 @@ class OutOfDistributionDetectionDataModule(DataModule):
             )
 
     def prepare_data(self):
+        # ===== DOWNLOAD DATA IF NEEDED (non-imglist mode only) =====
         if self.ood_use_imglist:
             return
         if self.ood_in_dist == 'mnist':
@@ -239,11 +349,20 @@ class OutOfDistributionDetectionDataModule(DataModule):
             dset.CIFAR100(self.args.data_dir, train=False, download=True)
 
     def setup(self, stage=None):
+        """
+        Initialize datasets for training/validation/test.
+        
+        This method is called by PyTorch Lightning before training.
+        For imglist mode, delegates to _setup_imglist().
+        """
         if self.ood_use_imglist:
             self._setup_imglist(stage=stage)
             return
+        
+        # ===== NON-IMGLIST MODE (legacy) =====
         transform_train = self._get_transform(train=True)
         if (stage == "fit" or stage == "validate") or stage is None:
+            # Create training dataset: pairs of (ID, OOD) images
             in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
             ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
             self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
@@ -365,7 +484,64 @@ class OutOfDistributionDetectionDataModule(DataModule):
         transform_test = self._get_transform(train=False)
         return self._load_ood_benchmarks(eval_ood_datasets, train=False, transform=transform_test)
 
+    def get_eval_id_dataset(self, stage='val'):
+        """
+        Get ID dataset for validation/test evaluation.
+        
+        This method returns the CORRECT ID dataset for evaluation:
+        - For imglist mode: returns 'val' split for validation, 'test' split for test
+        - This avoids data leakage by NOT using training data for evaluation
+        
+        Args:
+            stage: 'val' for validation, 'test' for testing
+            
+        Returns:
+            ID dataset for evaluation (not training data)
+        """
+        if self.ood_use_imglist:
+            # Use val split for validation, test split for test
+            # This avoids data leakage: model was trained on train split, 
+            # so we should evaluate on a separate split
+            if stage == 'val':
+                return self._id_datasets.get('val', self._id_datasets.get('test'))
+            else:
+                return self._id_datasets.get('test', self._id_datasets.get('val'))
+        else:
+            # Non-imglist mode: use test set for evaluation
+            return self._get_in_dist_dataset(train=False)
+
     def _setup_imglist(self, stage=None):
+        """
+        Initialize datasets using OpenOOD-style imglist format.
+        
+        This is the MAIN method for data initialization when using --ood_use_imglist True.
+        
+        CREATED DATASETS:
+        =================
+        1. self.train_dataset (for training_step):
+           - Type: OODDetectionDataset
+           - Returns: (px, qx, true_fdiv)
+           - px: ID image from train_cifar10.txt
+           - qx: OOD image from val_tin.txt (TinyImageNet validation set)
+           - true_fdiv: 0.0 (placeholder)
+        
+        2. self._id_datasets (for validation/test ID):
+           - {'train': ID train, 'val': ID val, 'test': ID test}
+        
+        3. self.eval_ood_datasets + self.eval_ood_names (for validation/test OOD):
+           - List of OOD datasets for computing AUROC, FPR95, etc.
+        
+        DATA SOURCES FOR CIFAR-10:
+        ==========================
+        - ID train:     benchmark_imglist/cifar10/train_cifar10.txt
+        - ID val:       benchmark_imglist/cifar10/val_cifar10.txt
+        - ID test:      benchmark_imglist/cifar10/test_cifar10.txt
+        - OOD train:    benchmark_imglist/cifar10/val_tin.txt (TinyImageNet for training pairs)
+        - OOD eval:     benchmark_imglist/cifar10/test_cifar100.txt (near-OOD)
+                        benchmark_imglist/cifar10/test_tin.txt (near-OOD)
+                        benchmark_imglist/cifar10/test_mnist.txt (far-OOD)
+                        benchmark_imglist/cifar10/test_svhn.txt (far-OOD)
+        """
         b = self._bench
         num_classes = b["num_classes"]
         self.num_classes = num_classes
@@ -376,6 +552,10 @@ class OutOfDistributionDetectionDataModule(DataModule):
         image_subdir = b.get("image_subdir", "")
         image_root = _join_data_dir(self.args.data_dir, image_subdir)
 
+        # ===== STEP 1: Load ID datasets (train/val/test) =====
+        # These are used for:
+        #   - train: training ID data (px in training_step)
+        #   - val/test: ID data for evaluation metrics
         self._id_datasets = {}
         for split, rel_path in b["id"].items():
             imglist_pth = _join_data_dir(self.args.data_dir, list_subdir, rel_path)
@@ -400,22 +580,49 @@ class OutOfDistributionDetectionDataModule(DataModule):
                 % (train_full, os.path.abspath(self.args.data_dir))
             )
 
-        ood_train_path = _join_data_dir(self.args.data_dir, list_subdir, b["ood_train"])
-        if not os.path.isfile(ood_train_path):
-            raise FileNotFoundError("OOD train list not found: %s" % ood_train_path)
+        # Transform for OOD data (test mode: no augmentation)
         transform_test = get_ood_imglist_transforms(
             "test", normalization_type=normalization_type, image_size=image_size, pre_size=pre_size
         )
-        ood_train_ds = ImglistDataset(
-            imglist_pth=ood_train_path, data_dir=image_root, num_classes=num_classes, transform=transform_test
-        )
-        ood_for_train = ImglistDatasetAsTuple(ood_train_ds)
 
+        # ===== STEP 2: Load OOD training data (for training_step) =====
+        # This is qx in the training pairs (px, qx)
+        # Supports two modes:
+        #   - "random": use 300K random images (no data leakage)
+        #   - path to txt file: use imglist dataset
+        ood_train_config = b.get("ood_train", "")
+        if ood_train_config == "random":
+            # Use random images dataset (no data leakage with eval OOD)
+            random_file = b.get("ood_train_random_file", "300K_random_images.npy")
+            random_path = os.path.join(self.args.data_dir, random_file)
+            if not os.path.isfile(random_path):
+                raise FileNotFoundError(
+                    "Random images file not found: %s. "
+                    "Download 300K random images for OOD training." % random_path
+                )
+            ood_for_train = OODRandomImagesDataset(random_path, transform=transform_test)
+        else:
+            # Legacy: use imglist file
+            ood_train_path = _join_data_dir(self.args.data_dir, list_subdir, ood_train_config)
+            if not os.path.isfile(ood_train_path):
+                raise FileNotFoundError("OOD train list not found: %s" % ood_train_path)
+            ood_train_ds = ImglistDataset(
+                imglist_pth=ood_train_path, data_dir=image_root, num_classes=num_classes, transform=transform_test
+            )
+            ood_for_train = ImglistDatasetAsTuple(ood_train_ds)
+
+        # ===== STEP 3: Create training dataset =====
+        # self.train_dataset.__getitem__(idx) returns (px, qx, 0.0)
+        # where px is ID image, qx is OOD image
         self.train_dataset = OODDetectionDataset(id_train, ood_for_train)
-        self.train_dataset.in_dist_dataset = id_train
+        self.train_dataset.in_dist_dataset = id_train  # Used by _evaluate_ood for val/test ID
+        
         self.val_dataset = DummyDataset(input_shape=(3, image_size, image_size))
         self.test_dataset = DummyDataset(input_shape=(3, image_size, image_size))
 
+        # ===== STEP 4: Load OOD evaluation datasets (for validation_step/test_step) =====
+        # These are used to compute AUROC, FPR95, etc. in _evaluate_ood()
+        # For CIFAR-10: val(TIN), cifar100, tin (near-OOD) + mnist, svhn (far-OOD)
         self.eval_ood_names = []
         self.eval_ood_datasets = []
         for name, rel_path in b.get("ood_eval", []):

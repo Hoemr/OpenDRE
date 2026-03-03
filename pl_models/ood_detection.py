@@ -198,6 +198,9 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
             for batch in loader:
                 x = batch[0] if isinstance(batch, (list, tuple)) else batch
                 x = x.to(self.device)
+                # Adapt channel count: if single channel (e.g., MNIST), replicate to 3 channels
+                if x.shape[1] == 1:
+                    x = x.repeat(1, 3, 1, 1)
                 scores = self.compute_ood_scores(x)
                 all_scores.append(scores.cpu().numpy())
         return np.concatenate(all_scores)

@@ -78,7 +78,7 @@ def get_common_args(parser):
     # decomposition
     parser.add_argument("--decomp", action='store_true', default=False)
     parser.add_argument('--K_decomp', type=int, default=400)
-    parser.add_argument("--polynomials", type=str, default="gaussianrbf", choices=Pk.POLYNOMIALS)
+    parser.add_argument("--polynomials", type=str, default="imqrbf", choices=Pk.POLYNOMIALS)
     parser.add_argument("--noise_type", type=str, default="zero")
     parser.add_argument('--clip_tau', type=float, default=1.)
     parser.add_argument("--auxiliary_loss", action='store_false', default=True)
