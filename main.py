@@ -8,7 +8,7 @@ import torchvision.utils as vutils
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
-from pl_data import SUBTASK_DATA_MODULES
+from pl_data import SUBTASK_DATA_MODULES, OODDetectionImglistDataModule
 from pl_models import SUBTASK_MODLE_MODULES
 
 from config import parse_args, get_save_path
@@ -203,8 +203,11 @@ def train_fdiv_estimation(args):
     save_path = get_save_path(args)
     checkpoint_dir = os.path.join(save_path, "checkpoints")
     
-    datamodule_class_name = SUBTASK_DATA_MODULES[args.subtask]
-    datamodule = datamodule_class_name(args)
+    if args.subtask == "ood_detection" and getattr(args, "ood_use_imglist", False):
+        datamodule = OODDetectionImglistDataModule(args)
+    else:
+        datamodule_class_name = SUBTASK_DATA_MODULES[args.subtask]
+        datamodule = datamodule_class_name(args)
     
     model_module_name = SUBTASK_MODLE_MODULES[args.subtask]
     

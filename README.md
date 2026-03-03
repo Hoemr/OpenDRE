@@ -93,11 +93,77 @@ python main.py fdiv_estimation --subtask mutual_information --data diag_multi_ga
 # Change point detection
 python main.py fdiv_estimation --subtask change_point_detection --data cpd_text --use_simplex True --cpd_swl 64
 
-# OOD detection (with ResNet-18)
-python main.py fdiv_estimation --subtask ood_detection --ood_in_dist mnist --image_backbone resnet18 --epochs 100 --batch_size 512
-
-# OOD detection (with WideResNet-28-10, recommended for CIFAR)
+# OOD detection (see "OOD detection" section below for tasks and parameters)
 python main.py fdiv_estimation --subtask ood_detection --ood_in_dist cifar10 --image_backbone wideresnet28_10 --epochs 100 --batch_size 512
+```
+
+## OOD detection: tasks and parameters
+
+Data is read from the **data** folder (sibling to OS_DRE; path set by `--data_dir`, default `../data`). Two modes:
+
+| Mode | Description | Parameters |
+|------|-------------|------------|
+| **Built-in** | ID data from torchvision (download to `data_dir`). OOD source and eval sets fixed per ID. | `--ood_in_dist`, `--ood_base_type`, `--image_backbone`, etc. |
+| **Imglist** | ID and OOD from list files under `data_dir` (one line per `image_path label`). Benchmarks defined in `pl_data/ood_imglist.py`. | `--ood_use_imglist True`, `--ood_in_dist` (cifar10 or cifar100), `--data_dir`, `--image_backbone`, etc. |
+
+### Built-in OOD (default)
+
+| Task | In-distribution | OOD source / eval | Command-line |
+|------|-----------------|-------------------|--------------|
+| MNIST OOD | MNIST | `--ood_base_type`: **local** (cropped MNIST), **general** (Fashion MNIST), **universal** (300K random images). Eval: Fashion, EMNIST. | `--ood_in_dist mnist --ood_base_type general --image_backbone resnet18` |
+| Fashion MNIST OOD | Fashion MNIST | Same options. Eval: MNIST, EMNIST. | `--ood_in_dist fashion_mnist --ood_base_type general --image_backbone resnet18` |
+| CIFAR-10 OOD | CIFAR-10 | Same options. Eval: SVHN, CIFAR-100, LSUN, CelebA. | `--ood_in_dist cifar10 --ood_base_type general --image_backbone wideresnet28_10` |
+| CIFAR-100 OOD | CIFAR-100 | Same options. Eval: SVHN, CIFAR-10, LSUN, CelebA. | `--ood_in_dist cifar100 --ood_base_type general --image_backbone wideresnet28_10` |
+
+- **Backbone**: `--image_backbone resnet18` (MNIST/Fashion); `--image_backbone wideresnet28_10` (CIFAR, recommended).
+- **Optional**: `--ood_noise_std 0.1`, `--ood_crop_size 12` (local), `--image_dropout 0.3`.
+
+### Imglist OOD (nearood / farood, OpenOOD layout)
+
+Imglist mode uses **list files** (one line per `image_path label`) and matches the **OpenOOD** data layout. Use this when you want standard near-OOD / far-OOD splits (e.g. CIFAR-100, TinyImageNet, MNIST, SVHN as OOD).
+
+**How to get the txt files and data**
+
+1. **Option A (recommended):** From OS_DRE repo, run our script (uses same OpenOOD Google Drive IDs):
+   ```bash
+   pip install gdown
+   python scripts/download_ood_benchmark.py --save_dir ../data
+   ```
+   This creates `../data/benchmark_imglist/` (all txt lists) and `../data/images_classic/{cifar10,cifar100,tin,mnist,svhn}/`. Then set `--data_dir ../data`.
+
+2. **Option B:** Clone [OpenOOD](https://github.com/Jingkang50/OpenOOD) and run their download script so that `data/` contains:
+   - `benchmark_imglist/` — all `.txt` list files (e.g. `cifar10/train_cifar10.txt`, `cifar10/test_cifar100.txt`, …)
+   - `images_classic/` — image folders (cifar10, cifar100, tin, mnist, svhn, …)
+   From OpenOOD repo (with `pip install gdown`):
+   ```bash
+   python scripts/download/download.py --contents datasets --datasets cifar-10 --save_dir /path/to/data --dataset_mode benchmark
+   ```
+   For CIFAR-10 + CIFAR-100 benchmarks you can use `--datasets ood_v1.5` and download both. The script fetches **benchmark_imglist** (txt) and the image datasets (cifar10, cifar100, tin, mnist, svhn, etc.) into `save_dir`.
+3. Point OS_DRE at that folder: `--data_dir /path/to/data` (the directory that contains `benchmark_imglist` and `images_classic`).
+
+**Near-OOD vs far-OOD (OpenOOD convention)**
+
+- **Near-OOD**: semantically closer to ID (e.g. CIFAR-100, TinyImageNet when ID is CIFAR-10).
+- **Far-OOD**: visually/semantically farther (e.g. MNIST, SVHN, Texture, Places365 when ID is CIFAR-10).
+
+In `pl_data/ood_imglist.py`, `OOD_IMGLIST_BENCHMARKS["cifar10"]["ood_eval"]` defines the evaluation OOD sets by name and list path; the same txt files are produced by OpenOOD’s download. You do not set nearood/farood via a single parameter — they are fixed by the benchmark (list of eval datasets). To add or remove OOD sets, edit `OOD_IMGLIST_BENCHMARKS` in `pl_data/ood_imglist.py`.
+
+**Layout after OpenOOD download**
+
+```
+data_dir/
+  benchmark_imglist/
+    cifar10/   train_cifar10.txt, val_cifar10.txt, test_cifar10.txt, val_tin.txt, test_cifar100.txt, test_tin.txt, test_mnist.txt, test_svhn.txt, ...
+    cifar100/  ...
+  images_classic/
+    cifar10/, cifar100/, tin/, mnist/, svhn/, ...
+```
+
+**Example**
+
+```bash
+# After downloading with OpenOOD script and setting data_dir to that data folder
+python main.py fdiv_estimation --subtask ood_detection --ood_use_imglist True --ood_in_dist cifar10 --image_backbone resnet18 --epochs 500  --sub_method neural --subsub_method nce
 ```
 
 ## Supported Tasks and Datasets
@@ -119,6 +185,41 @@ python main.py fdiv_estimation --subtask ood_detection --ood_in_dist cifar10 --i
 | `mi_realdata` | image, text, mixture | Real-world MI estimation (MNIST, IMDB, CIFAR-10) |
 | `change_point_detection` | cpd_mc, cpd_text, cpd_creditcard | Detect change points in time series |
 | `ood_detection` | mnist, fashion_mnist, cifar10, cifar100 | Detect out-of-distribution samples |
+
+## Data Acquisition（数据获取）
+
+本节说明各任务/子任务下数据的来源、存放位置及获取方式。数据根目录由 `--data_dir` 指定，默认为 `../data`。
+
+### Likelihood Estimation
+
+| 子任务 | 数据来源 | 存放位置 / 获取方式 |
+|--------|----------|----------------------|
+| **synthetic2d** | 程序内生成 | 无需下载，内存中合成（如 swissroll、8gaussians、pinwheel 等） |
+| **tabular** | 本地文件（UCI 等） | 需手动将数据放到 `{data_dir}/tabular/` 下，并按下列结构放置：<br>• **BSDS300**: `BSDS300/BSDS300.hdf5`<br>• **power**: `power/data.npy`<br>• **gas**: `gas/ethylene_CO.pickle`<br>• **hepmass**: `hepmass/1000_train.csv`, `hepmass/1000_test.csv`<br>• **miniboone**: `miniboone/data.npy` |
+| **real_image** | 自动下载 + 本地 | **mnist / fashion_mnist / cifar10 / svhn / lsun_church / celeba**：通过 torchvision `download=True` 下载到 `{data_dir}`。<br>**frey_face**：需自行将 `frey_rawface.mat` 放到 `{data_dir}` 下。 |
+
+### F-Divergence Estimation
+
+| 子任务 | 数据来源 | 存放位置 / 获取方式 |
+|--------|----------|----------------------|
+| **distribution_shift** | 程序内生成 | 合成数据（如 gauss_shift、beta_shift、cifar_c、domainbed），无需额外数据文件。 |
+| **mutual_information** | 程序内生成 | 合成数据（如 half_cube_map、gauss 等），无需下载。 |
+| **mi_realdata** | 自动下载 + 本地 | 使用 `args.data_dir`：图像（MNIST/CIFAR-10）由 torchvision 下载；文本（IMDB 等）需按代码约定放在 `{data_dir}` 对应子目录下。 |
+| **change_point_detection** | 本地文件 / 合成 | **cpd_mc**：合成数据，无需文件。<br>**cpd_text**：需将 `Language Detection.csv` 放在 `./data/density_ratio_estimation/change_point_detection/`（或代码中配置的路径）。<br>**cpd_creditcard**：需将 `creditcard.txt`（或同名 CSV）放在同一目录。 |
+| **ood_detection** | 见下方 OOD 小节 | 见 [OOD 数据：txt 与图像如何获取](#ood-数据txt-与图像如何获取)。 |
+
+### OOD 数据：txt 与图像如何获取
+
+- **仅用内置 ID 数据集（无 imglist）**  
+  ID 数据（如 CIFAR-10/CIFAR-100）通过 torchvision 自动下载到 `{data_dir}`；可选 `300K_random_images.npy` 用于 universal OOD，需自行准备并放在约定路径。
+
+- **使用 imglist 式 OOD（OpenOOD 风格）**  
+  两种方式任选其一：  
+  **方式 A**：运行脚本  
+  `python scripts/download_ood_benchmark.py`  
+  会拉取 `benchmark_imglist` 与 `images_classic` 到当前配置的数据目录（脚本内或环境指定的目录）。  
+  **方式 B**：从 [OpenOOD](https://github.com/Jingkang50/OpenOOD) 克隆并按其文档准备 `benchmark_imglist/` 与 `images_classic/`，再放到 `{data_dir}` 下，使目录结构与 `pl_data/ood_imglist.py` 中的 `OOD_IMGLIST_BENCHMARKS`、`list_subdir`/`image_subdir` 一致（含 nearood/farood 等）。  
+  启用 imglist 时请使用 `--ood_use_imglist True`，且仅支持 `cifar10`/`cifar100` 作为 ID 数据集。
 
 ## Method Configuration
 

@@ -307,39 +307,51 @@ class TxtLoggerCallback(pl.Callback):
         )
     
     def _ood_val(self, trainer, pl_module):
-        metrics = self._get_metrics(trainer, ['val_auroc_mean',])
-        
+        # Lightning v2: callback runs before model's on_validation_epoch_end, so callback_metrics
+        # often has no val_* yet. The OOD model logs validation to training_logger itself; skip
+        # here to avoid an empty "Epoch X/Y" line. If metrics are present (e.g. older Lightning),
+        # log as before.
+        metrics = self._get_metrics(trainer, [
+            'val_auroc_mean', 'val_fpr95_mean', 'val_aupr_in_mean', 'val_aupr_out_mean', 'val_acc_mean'
+        ])
+        if metrics.get('val_auroc_mean') is None and metrics.get('val_fpr95_mean') is None:
+            return
         all_metrics = trainer.callback_metrics
         val_auroc_metrics = {k: v for k, v in all_metrics.items() if k.startswith('val_auroc_') and k != 'val_auroc_mean'}
-        
         metrics.update(val_auroc_metrics)
-        
         formatters = {
-            'val_auroc_mean':     lambda v: f"AUROC Mean {v:.4f}"
+            'val_auroc_mean':   lambda v: f"AUROC {v:.4f}",
+            'val_fpr95_mean':   lambda v: f"FPR95 {v:.4f}",
+            'val_aupr_in_mean': lambda v: f"AUPR-IN {v:.4f}",
+            'val_aupr_out_mean': lambda v: f"AUPR-OUT {v:.4f}",
+            'val_acc_mean':     lambda v: f"ACC {v:.4f}",
         }
-        
         for metric_name in val_auroc_metrics.keys():
-            formatters[metric_name] = lambda v, name=metric_name: f"{name.replace('val_', '').replace('_', ' ').title()} {v:.4f}"
-        
-        self._log_epoch(trainer=trainer,metrics=metrics,formatters=formatters)
+            formatters[metric_name] = lambda v, name=metric_name: f"{name.replace('val_auroc_', '').replace('_', ' ')} {v:.4f}"
+        self._log_epoch(trainer=trainer, metrics=metrics, formatters=formatters)
     
     def _ood_test(self, trainer, pl_module):
-        metrics = self._get_metrics(trainer, ['test_auroc_mean', 'test_in_score_mean', 'test_ood_score_mean'])
-        
+        # Same as _ood_val: callback may run before model in Lightning v2; model logs test to training_logger.
+        metrics = self._get_metrics(trainer, [
+            'test_auroc_mean', 'test_fpr95_mean', 'test_aupr_in_mean', 'test_aupr_out_mean', 'test_acc_mean',
+            'test_in_score_mean', 'test_ood_score_mean'
+        ])
+        if metrics.get('test_auroc_mean') is None and metrics.get('test_fpr95_mean') is None:
+            return
         all_metrics = trainer.callback_metrics
         test_auroc_metrics = {k: v for k, v in all_metrics.items() if k.startswith('test_auroc_') and k != 'test_auroc_mean'}
-        
         metrics.update(test_auroc_metrics)
-        
         formatters = {
-            'test_auroc_mean':     lambda v: f"AUROC Mean {v:.4f}",
-            'test_in_score_mean':  lambda v: f"In Score {v:.4f}",
-            'test_ood_score_mean': lambda v: f"OOD Score {v:.4f}",
+            'test_auroc_mean':   lambda v: f"AUROC {v:.4f}",
+            'test_fpr95_mean':   lambda v: f"FPR95 {v:.4f}",
+            'test_aupr_in_mean': lambda v: f"AUPR-IN {v:.4f}",
+            'test_aupr_out_mean': lambda v: f"AUPR-OUT {v:.4f}",
+            'test_acc_mean':     lambda v: f"ACC {v:.4f}",
+            'test_in_score_mean':  lambda v: f"InScore {v:.4f}",
+            'test_ood_score_mean': lambda v: f"OODScore {v:.4f}",
         }
-        
         for metric_name in test_auroc_metrics.keys():
-            formatters[metric_name] = lambda v, name=metric_name: f"{name.replace('test_', '').replace('_', ' ').title()} {v:.4f}"
-        
+            formatters[metric_name] = lambda v, name=metric_name: f"{name.replace('test_auroc_', '').replace('_', ' ')} {v:.4f}"
         self._log_epoch(
             trainer=trainer,
             prefix="Test",

@@ -4,7 +4,6 @@ from .path_base import (
     ToyInterpXt,
     ImageInterpXt,
     InterpXt,
-    VPSDE,
     OTPlanSampler,
     logit_transform,
 )

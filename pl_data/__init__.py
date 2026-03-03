@@ -19,6 +19,7 @@ from .ood_detection import (
     OOD_EVAL_CONFIG,
     OutOfDistributionDetectionDataModule,
 )
+from .ood_imglist import OODDetectionImglistDataModule
 
 SUBTASK_DATA_MODULES = {
     "synthetic2d": Synthetic2DIterDataModule,
@@ -57,5 +58,6 @@ __all__ = [
     "OOD_BASE_TYPES",
     "OOD_EVAL_CONFIG",
     "OutOfDistributionDetectionDataModule",
+    "OODDetectionImglistDataModule",
     "SUBTASK_DATA_MODULES",
 ]
