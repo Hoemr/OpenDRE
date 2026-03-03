@@ -603,37 +603,6 @@ class ScoreMatchingTrainStepFn(nn.Module):
             return {'loss': loss.mean(), 'nll': nll.mean()}
         
         else:
-            # if step % 1 == 0:
-            #     def get_avg_and_format(loss):
-            #         avg = loss.mean().detach().item()
-            #         return "{:.4f}".format(avg)
-            #     print("======================================")
-            #     # loss_avg = get_avg_and_format(loss)
-            #     # ssm_term1_avg = get_avg_and_format(ssm_term1)
-            #     # ssm_term2_avg = "{:.4f}".format(ssm_term2.mean().detach().item())
-            #     # term1_avg = "{:.4f}".format(term1.mean().detach().item())
-            #     # term2_avg = "{:.4f}".format(term2.mean().detach().item())
-            #     # term3_avg = "{:.4f}".format(term3.mean().detach().item())
-            #     # term4_avg = "{:.4f}".format(term4.mean().detach().item())
-            #     # l12_loss_avg = "{:.4f}".format(l12_loss.mean().detach().item())
-            #     # bregman_avg = "{:.4f}".format(bregman.mean().detach().item())
-            #     # # mine_loss_avg = "{:.4f}".format(mine_loss.mean().detach().item())
-                
-            #     # score_x_norm = 0.5 * (torch.sum(score_x.view((batch_size,-1)) * score_x.view((batch_size,-1)), dim=-1)).view((batch_size,-1))
-            #     # score_t_norm = 0.5 * (torch.sum(score_t * score_t, dim=-1)).view((batch_size,-1))
-            #     # score_x_norm_avg = get_avg_and_format(score_x_norm)
-            #     # score_t_norm_avg = get_avg_and_format(score_t_norm)
-            #     # clip_loss_avg = "{:.4f}".format(clip_loss.mean().detach().item())
-            #     # logr0 = get_avg_and_format(logr0)
-            #     # logr1 = get_avg_and_format(logr1)
-            #     # print(f"score_x: {score_x_norm_avg}, score_t: {score_t_norm_avg}, breg: {bregman_avg}, clip: {clip_loss_avg}, l12_loss={l12_loss_avg}, logr0: {logr0}, logr1: {logr1}")
-
-            #     elbo_avg = get_avg_and_format(-elbo)
-            #     print(f"elbo: {elbo_avg}")
-            
-            # likelihood_fn = self.get_likelihood_fn(self.path, rtol=self.args.rtol, atol=self.args.atol, solver=self.args.solver, eps=self.args.eps)
-            # logp, nfe = likelihood_fn(score_model, x0, self.joint)
-            # nll = -logp
             return {'loss': loss.mean(), 'nll': nll.mean()}
     
     def sparsity_condition(self, sigma):
@@ -662,17 +631,6 @@ class ScoreMatchingTrainStepFn(nn.Module):
             
             term1 = - F.logsigmoid(-logr0)  # .clamp(max=1.)
             term2 = - F.logsigmoid(logr1)
-            
-            # term1 = - F.logsigmoid(-logr0.clamp(max=0.))  # .clamp(max=1.)
-            # term2 = - F.logsigmoid(logr1.clamp(max=bound))
-
-            # # gamma=0.1
-            # denom_p0 = 1 + gamma * F.relu(logr0)  # 仅对 r0 > 1 增强
-            # denom_p1 = 1 + gamma * F.relu(-logr1)  # 仅对 r1 < 1 增强
-            # w0 = 1 / denom_p0
-            # w1 = 1 / denom_p1
-            # term1 = - F.logsigmoid(-logr0) * w0
-            # term2 = - F.logsigmoid(logr1) * w1
             
         else:
             # Compute r with numerical stability

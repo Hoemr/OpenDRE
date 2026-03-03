@@ -231,6 +231,11 @@ class DensityRatioEstimationModel(pl.LightningModule):
         else:
             def prepare_batch(batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
                 px, qx, true_mi = batch
+                if self.subtask == "ood_detection" and self.training:
+                    noise_std = getattr(self.args, "sample_noise_std", 0.0)
+                    if noise_std > 0:
+                        px = px + torch.randn_like(px) * noise_std
+                        qx = qx + torch.randn_like(qx) * noise_std
                 return px, qx, true_mi
         self.prepare_batch = prepare_batch
 

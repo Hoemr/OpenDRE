@@ -347,7 +347,7 @@ class InterpXt(Path):
         self.N = N    
         self.data_ndim = data_ndim # 2 for toy and 4 for image
         
-        self.GRBC_epsilon = args.GRBC_epsilon
+        self.sample_noise_std = args.sample_noise_std
         self.bridge = args.bridge
         self.combination_type = args.combination_type  # e.g., "linear", "VPSDE", "cosine"
         self.gamma_t = args.gamma_t  # in fact is gamma^2
@@ -548,12 +548,12 @@ class InterpXt(Path):
             if alpha_t is None:
                 alpha_t, beta_t = self.get_alpha_t_beta_t(t)
             t = t.reshape(-1, *[1] * (alpha_t.dim() - 1))
-            return self.gamma_t * t * (1 - t) + (alpha_t**2 + beta_t**2) * self.GRBC_epsilon
+            return self.gamma_t * t * (1 - t) + (alpha_t**2 + beta_t**2) * self.sample_noise_std
         def bridge_marginal_var_dt_fn(t, alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None):
             if alpha_t is None or d_alpha_dt is None:
                 alpha_t, beta_t, d_alpha_dt, d_beta_dt = self.get_coefficients_and_derivatives(t)
             t = t.reshape(-1, *[1] * (alpha_t.dim() - 1))
-            return self.gamma_t * (1. - 2 * t) + 2 * (alpha_t * d_alpha_dt + beta_t * d_beta_dt) * self.GRBC_epsilon
+            return self.gamma_t * (1. - 2 * t) + 2 * (alpha_t * d_alpha_dt + beta_t * d_beta_dt) * self.sample_noise_std
         if bridge:
             self.marginal_var_fn = bridge_marginal_var_fn
             self.marginal_var_dt_fn = bridge_marginal_var_dt_fn

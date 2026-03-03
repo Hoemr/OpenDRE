@@ -5,7 +5,7 @@ import torch
 from sklearn.metrics import roc_auc_score, average_precision_score
 from torch.utils.data import DataLoader
 from path import ImageInterpXt
-from pl_data import OOD_EVAL_CONFIG
+from pl_data import OOD_EVAL_CONFIG, OOD_IMGLIST_NEAR_FAR
 from .base import DensityRatioEstimationModel
 
 _TRAIN_LOGGER_NAME = "training_logger"
@@ -101,7 +101,7 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         self._log_ood_val_to_txt(mean_metrics, ood_names, all_aurocs)
 
     def _log_ood_val_to_txt(self, mean_metrics, ood_names, all_aurocs):
-        """Write validation metrics to training_logger so they appear even when callback runs before model (Lightning v2)."""
+        """Write validation metrics to training_logger (Lightning v2). Group by near-OOD / far-OOD when using imglist."""
         if not (self.trainer and self.trainer.is_global_zero):
             return
         log = logging.getLogger(_TRAIN_LOGGER_NAME)
@@ -115,10 +115,26 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
                 parts.append(f"{k} {v:.4f}")
             else:
                 parts.append(f"{k} nan")
-        for name, auroc in zip(ood_names, all_aurocs):
-            if auroc is not None:
-                parts.append(f"{name} {auroc:.4f}")
-        log.info(", ".join(parts))
+        name_to_auroc = {n: a for n, a in zip(ood_names, all_aurocs) if a is not None}
+        near_far = OOD_IMGLIST_NEAR_FAR.get(self.ood_in_dist, {}) if getattr(self.args, "ood_use_imglist", False) else {}
+        if near_far:
+            near_parts = []
+            for name in near_far.get("near", []):
+                if name in name_to_auroc:
+                    near_parts.append(f"{name} {name_to_auroc[name]:.4f}")
+            far_parts = []
+            for name in near_far.get("far", []):
+                if name in name_to_auroc:
+                    far_parts.append(f"{name} {name_to_auroc[name]:.4f}")
+            if near_parts:
+                parts.append("near-OOD: " + ", ".join(near_parts))
+            if far_parts:
+                parts.append("far-OOD: " + ", ".join(far_parts))
+        else:
+            for name, auroc in zip(ood_names, all_aurocs):
+                if auroc is not None:
+                    parts.append(f"{name} {auroc:.4f}")
+        log.info(" | ".join(parts))
 
     def test_step(self, batch, batch_idx):
         return {}
@@ -153,23 +169,39 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         self._log_ood_test_to_txt(mean_metrics, ood_names, all_aurocs)
 
     def _log_ood_test_to_txt(self, mean_metrics, ood_names, all_aurocs):
-        """Write test metrics to training_logger (Lightning v2 callback order)."""
+        """Write test metrics to training_logger. Group by near-OOD / far-OOD when using imglist."""
         if not (self.trainer and self.trainer.is_global_zero):
             return
         log = logging.getLogger(_TRAIN_LOGGER_NAME)
         if not log.handlers:
             return
-        parts = ["Test Epoch"]
+        parts = ["Test"]
         for k, v in [("AUROC", mean_metrics.get("auroc")), ("FPR95", mean_metrics.get("fpr95")),
                      ("AUPR-IN", mean_metrics.get("aupr_in")), ("AUPR-OUT", mean_metrics.get("aupr_out")), ("ACC", mean_metrics.get("acc"))]:
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
                 parts.append(f"{k} {v:.4f}")
             else:
                 parts.append(f"{k} nan")
-        for name, auroc in zip(ood_names, all_aurocs):
-            if auroc is not None:
-                parts.append(f"{name} {auroc:.4f}")
-        log.info(", ".join(parts))
+        name_to_auroc = {n: a for n, a in zip(ood_names, all_aurocs) if a is not None}
+        near_far = OOD_IMGLIST_NEAR_FAR.get(self.ood_in_dist, {}) if getattr(self.args, "ood_use_imglist", False) else {}
+        if near_far:
+            near_parts = []
+            for name in near_far.get("near", []):
+                if name in name_to_auroc:
+                    near_parts.append(f"{name} {name_to_auroc[name]:.4f}")
+            far_parts = []
+            for name in near_far.get("far", []):
+                if name in name_to_auroc:
+                    far_parts.append(f"{name} {name_to_auroc[name]:.4f}")
+            if near_parts:
+                parts.append("near-OOD: " + ", ".join(near_parts))
+            if far_parts:
+                parts.append("far-OOD: " + ", ".join(far_parts))
+        else:
+            for name, auroc in zip(ood_names, all_aurocs):
+                if auroc is not None:
+                    parts.append(f"{name} {auroc:.4f}")
+        log.info(" | ".join(parts))
 
     def _compute_scores_for_loader(self, loader):
         self.model.eval()

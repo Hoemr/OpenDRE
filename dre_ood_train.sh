@@ -176,7 +176,7 @@ run_experiment() {
             --subtask ood_detection \
             --ood_in_dist "$in_dist" \
             --ood_base_type "$base_type" \
-            --ood_noise_std $NOISE_STD \
+            --sample_noise_std $NOISE_STD \
             --ood_anneal_alpha_init $ANNEAL_ALPHA_INIT \
             --ood_anneal_gamma $ANNEAL_GAMMA \
             --sub_method neural \

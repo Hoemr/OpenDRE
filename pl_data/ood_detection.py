@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""OOD detection datasets and DataModule."""
+"""OOD detection datasets and DataModule (built-in + imglist unified)."""
 import os
 import random
 
@@ -11,15 +11,103 @@ from torchvision import transforms
 
 from .base import DataModule
 
-OOD_IN_DIST_DATASETS = ['mnist', 'fashion_mnist', 'cifar10', 'cifar100']
-OOD_BASE_TYPES = ['local', 'general', 'universal']
+OOD_IN_DIST_DATASETS = ["mnist", "fashion_mnist", "cifar10", "cifar100"]
+OOD_BASE_TYPES = ["local", "general", "universal"]
 
 OOD_EVAL_CONFIG = {
-    'mnist': {'ood_datasets': ['fashion_mnist', 'emnist']},
-    'fashion_mnist': {'ood_datasets': ['mnist', 'emnist']},
-    'cifar10': {'ood_datasets': ['svhn', 'cifar100', 'lsun', 'celeba']},
-    'cifar100': {'ood_datasets': ['svhn', 'cifar10', 'lsun', 'celeba']},
+    "mnist": {"ood_datasets": ["fashion_mnist", "emnist"]},
+    "fashion_mnist": {"ood_datasets": ["mnist", "emnist"]},
+    "cifar10": {"ood_datasets": ["svhn", "cifar100", "lsun", "celeba"]},
+    "cifar100": {"ood_datasets": ["svhn", "cifar10", "lsun", "celeba"]},
 }
+
+# Imglist/OpenOOD layout configs.
+OOD_IMGLIST_NORMALIZATION = {
+    "cifar10": ([0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616]),
+    "cifar100": ([0.5071, 0.4867, 0.4408], [0.2675, 0.2565, 0.2761]),
+    "mnist": ([0.1307], [0.3081]),
+    "imagenet": ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+}
+
+OOD_IMGLIST_BENCHMARKS = {
+    "cifar10": {
+        "num_classes": 10,
+        "image_size": 32,
+        "normalization_type": "cifar10",
+        "list_subdir": "benchmark_imglist",
+        "image_subdir": "images_classic",
+        "id": {
+            "train": "cifar10/train_cifar10.txt",
+            "val": "cifar10/val_cifar10.txt",
+            "test": "cifar10/test_cifar10.txt",
+        },
+        "ood_train": "cifar10/val_tin.txt",
+        "ood_eval": [
+            ("val", "cifar10/val_tin.txt"),
+            ("cifar100", "cifar10/test_cifar100.txt"),
+            ("tin", "cifar10/test_tin.txt"),
+            ("mnist", "cifar10/test_mnist.txt"),
+            ("svhn", "cifar10/test_svhn.txt"),
+        ],
+    },
+    "cifar100": {
+        "num_classes": 100,
+        "image_size": 32,
+        "normalization_type": "cifar100",
+        "list_subdir": "benchmark_imglist",
+        "image_subdir": "images_classic",
+        "id": {
+            "train": "cifar100/train_cifar100.txt",
+            "val": "cifar100/val_cifar100.txt",
+            "test": "cifar100/test_cifar100.txt",
+        },
+        "ood_train": "cifar100/val_tin.txt",
+        "ood_eval": [
+            ("val", "cifar100/val_tin.txt"),
+            ("cifar10", "cifar100/test_cifar10.txt"),
+            ("tin", "cifar100/test_tin.txt"),
+            ("mnist", "cifar100/test_mnist.txt"),
+            ("svhn", "cifar100/test_svhn.txt"),
+        ],
+    },
+}
+
+OOD_IMGLIST_NEAR_FAR = {
+    "cifar10": {"near": ["val", "cifar100", "tin"], "far": ["mnist", "svhn"]},
+    "cifar100": {"near": ["val", "cifar10", "tin"], "far": ["mnist", "svhn"]},
+}
+
+OOD_IMGLIST_IN_DIST_CHOICES = list(OOD_IMGLIST_BENCHMARKS.keys())
+
+
+def get_ood_imglist_transforms(split, normalization_type="cifar10", image_size=32, pre_size=None):
+    mean, std = OOD_IMGLIST_NORMALIZATION.get(normalization_type, OOD_IMGLIST_NORMALIZATION["cifar10"])
+    is_train = split == "train"
+
+    if normalization_type == "mnist":
+        if is_train:
+            return transforms.Compose(
+                [
+                    transforms.RandomCrop(image_size, padding=4),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean, std),
+                ]
+            )
+        return transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
+
+    if pre_size and pre_size != image_size:
+        resize = transforms.Resize(pre_size)
+        crop = transforms.CenterCrop(image_size)
+    else:
+        resize = transforms.Resize((image_size, image_size))
+        crop = transforms.Lambda(lambda x: x)
+
+    if is_train:
+        return transforms.Compose(
+            [resize, crop, transforms.RandomHorizontalFlip(), transforms.ToTensor(), transforms.Normalize(mean, std)]
+        )
+    return transforms.Compose([resize, crop, transforms.ToTensor(), transforms.Normalize(mean, std)])
 
 
 class ConcatDataset(Dataset):
@@ -48,10 +136,9 @@ class ConcatDataset(Dataset):
 
 
 class OODDetectionDataset(Dataset):
-    def __init__(self, in_dist_dataset, ood_dataset, noise_std=0.0):
+    def __init__(self, in_dist_dataset, ood_dataset):
         self.in_dist_dataset = in_dist_dataset
         self.ood_dataset = ood_dataset
-        self.noise_std = noise_std
         self.num_samples = len(in_dist_dataset)
 
     def __len__(self):
@@ -61,23 +148,84 @@ class OODDetectionDataset(Dataset):
         x_in, _ = self.in_dist_dataset[idx]
         ood_idx = random.randint(0, len(self.ood_dataset) - 1)
         x_ood, _ = self.ood_dataset[ood_idx]
-        if self.noise_std > 0:
-            x_in = x_in + torch.randn_like(x_in) * self.noise_std
-            x_ood = x_ood + torch.randn_like(x_ood) * self.noise_std
         return x_in, x_ood, torch.tensor(0.0)
+
+
+class ImglistDataset(Dataset):
+    """Dataset from a list file where each line is 'image_path label'."""
+
+    def __init__(self, imglist_pth, data_dir, num_classes, transform=None, maxlen=None):
+        self.data_dir = data_dir.rstrip("/") if data_dir else ""
+        self.num_classes = num_classes
+        self.transform = transform
+        self.maxlen = maxlen
+        with open(imglist_pth) as f:
+            self.imglist = [line.strip() for line in f if line.strip()]
+        if maxlen is not None:
+            self.imglist = self.imglist[:maxlen]
+
+    def __len__(self):
+        return len(self.imglist)
+
+    def __getitem__(self, index):
+        line = self.imglist[index]
+        parts = line.split(" ", 1)
+        image_name = parts[0]
+        label = int(parts[1]) if len(parts) > 1 else 0
+        path = os.path.join(self.data_dir, image_name) if self.data_dir and not image_name.startswith("/") else image_name
+        from PIL import Image
+
+        image = Image.open(path).convert("RGB")
+        data = self.transform(image) if self.transform is not None else image
+        return {"data": data, "label": label, "index": index}
+
+
+class ImglistDatasetAsTuple(Dataset):
+    """Wrapper so ImglistDataset returns (data, label)."""
+
+    def __init__(self, imglist_dataset):
+        self._ds = imglist_dataset
+
+    def __len__(self):
+        return len(self._ds)
+
+    def __getitem__(self, index):
+        item = self._ds[index]
+        return item["data"], item["label"]
+
+
+def _join_data_dir(data_dir, *parts):
+    out = data_dir
+    for p in parts:
+        if not p or (isinstance(p, str) and p.startswith("/")):
+            continue
+        out = os.path.join(out, p)
+    return out
 
 
 class OutOfDistributionDetectionDataModule(DataModule):
     def __init__(self, args):
         super().__init__(args)
         self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
+        self.ood_use_imglist = getattr(args, 'ood_use_imglist', False)
         self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
-        self.ood_noise_std = getattr(args, 'ood_noise_std', 0.1)
         self.ood_anneal_alpha_init = getattr(args, 'ood_anneal_alpha_init', 0.0)
         self.ood_crop_size = getattr(args, 'ood_crop_size', 12)
         self.num_workers = 0
+        self.eval_ood_names = []
+        self.eval_ood_datasets = []
+        self._id_datasets = {}
+        self._bench = OOD_IMGLIST_BENCHMARKS.get(self.ood_in_dist)
+        self.num_classes = 0
+        if self.ood_use_imglist and self.ood_in_dist not in OOD_IMGLIST_BENCHMARKS:
+            raise ValueError(
+                "ood_in_dist=%s not in OOD_IMGLIST_BENCHMARKS. Choices: %s"
+                % (self.ood_in_dist, OOD_IMGLIST_IN_DIST_CHOICES)
+            )
 
     def prepare_data(self):
+        if self.ood_use_imglist:
+            return
         if self.ood_in_dist == 'mnist':
             dset.MNIST(self.args.data_dir, train=True, download=True)
             dset.MNIST(self.args.data_dir, train=False, download=True)
@@ -92,17 +240,23 @@ class OutOfDistributionDetectionDataModule(DataModule):
             dset.CIFAR100(self.args.data_dir, train=False, download=True)
 
     def setup(self, stage=None):
+        if self.ood_use_imglist:
+            self._setup_imglist(stage=stage)
+            return
         transform_train = self._get_transform(train=True)
-        transform_test = self._get_transform(train=False)
         if (stage == "fit" or stage == "validate") or stage is None:
             in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
             ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
-            self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset, noise_std=self.ood_noise_std)
+            self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
             self.val_dataset = DummyDataset(input_shape=(3, 32, 32))
         if stage == "test" or stage is None:
             self.test_dataset = DummyDataset(input_shape=(3, 32, 32))
 
     def _get_transform(self, train=True):
+        # Prefer imglist transform settings when available.
+        if self.ood_in_dist in ['cifar10', 'cifar100']:
+            split = "train" if train else "test"
+            return get_ood_imglist_transforms(split, normalization_type=self.ood_in_dist, image_size=32)
         if self.ood_in_dist in ['mnist', 'fashion_mnist']:
             transform_list = [
                 transforms.Resize(32),
@@ -138,6 +292,9 @@ class OutOfDistributionDetectionDataModule(DataModule):
             ])
 
     def _get_in_dist_dataset(self, train=True, transform=None):
+        if self.ood_use_imglist:
+            key = "train" if train else "test"
+            return self._id_datasets.get(key, self._id_datasets.get("train"))
         if transform is None:
             transform = self._get_transform(train=train)
         if self.ood_in_dist == 'mnist':
@@ -203,9 +360,74 @@ class OutOfDistributionDetectionDataModule(DataModule):
         return ConcatDataset(loaded_datasets)
 
     def get_eval_ood_datasets(self, stage='val'):
+        if self.ood_use_imglist:
+            return self.eval_ood_datasets
         eval_ood_datasets = OOD_EVAL_CONFIG.get(self.ood_in_dist, {}).get('ood_datasets', [])
         transform_test = self._get_transform(train=False)
         return self._load_ood_benchmarks(eval_ood_datasets, train=False, transform=transform_test)
+
+    def _setup_imglist(self, stage=None):
+        b = self._bench
+        num_classes = b["num_classes"]
+        self.num_classes = num_classes
+        normalization_type = b["normalization_type"]
+        image_size = b["image_size"]
+        pre_size = b.get("pre_size")
+        list_subdir = b.get("list_subdir", "")
+        image_subdir = b.get("image_subdir", "")
+        image_root = _join_data_dir(self.args.data_dir, image_subdir)
+
+        self._id_datasets = {}
+        for split, rel_path in b["id"].items():
+            imglist_pth = _join_data_dir(self.args.data_dir, list_subdir, rel_path)
+            if not os.path.isfile(imglist_pth):
+                continue
+            transform = get_ood_imglist_transforms(
+                split, normalization_type=normalization_type, image_size=image_size, pre_size=pre_size
+            )
+            ds = ImglistDataset(
+                imglist_pth=imglist_pth, data_dir=image_root, num_classes=num_classes, transform=transform
+            )
+            self._id_datasets[split] = ImglistDatasetAsTuple(ds)
+
+        id_train = self._id_datasets.get("train")
+        if id_train is None:
+            train_rel = b["id"].get("train", "")
+            train_full = _join_data_dir(self.args.data_dir, list_subdir, train_rel)
+            raise FileNotFoundError(
+                "Imglist OOD mode needs list files (one line per 'image_path label'). "
+                "Missing: %s (data_dir=%s). "
+                "Use OpenOOD download script to get benchmark_imglist + images_classic."
+                % (train_full, os.path.abspath(self.args.data_dir))
+            )
+
+        ood_train_path = _join_data_dir(self.args.data_dir, list_subdir, b["ood_train"])
+        if not os.path.isfile(ood_train_path):
+            raise FileNotFoundError("OOD train list not found: %s" % ood_train_path)
+        transform_test = get_ood_imglist_transforms(
+            "test", normalization_type=normalization_type, image_size=image_size, pre_size=pre_size
+        )
+        ood_train_ds = ImglistDataset(
+            imglist_pth=ood_train_path, data_dir=image_root, num_classes=num_classes, transform=transform_test
+        )
+        ood_for_train = ImglistDatasetAsTuple(ood_train_ds)
+
+        self.train_dataset = OODDetectionDataset(id_train, ood_for_train)
+        self.train_dataset.in_dist_dataset = id_train
+        self.val_dataset = DummyDataset(input_shape=(3, image_size, image_size))
+        self.test_dataset = DummyDataset(input_shape=(3, image_size, image_size))
+
+        self.eval_ood_names = []
+        self.eval_ood_datasets = []
+        for name, rel_path in b.get("ood_eval", []):
+            pth = _join_data_dir(self.args.data_dir, list_subdir, rel_path)
+            if not os.path.isfile(pth):
+                continue
+            ds = ImglistDataset(
+                imglist_pth=pth, data_dir=image_root, num_classes=num_classes, transform=transform_test
+            )
+            self.eval_ood_names.append(name)
+            self.eval_ood_datasets.append(ImglistDatasetAsTuple(ds))
 
 
 class DummyDataset(Dataset):

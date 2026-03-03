@@ -66,7 +66,7 @@ def get_common_args(parser):
     # bridge model
     parser.add_argument("--bridge", action='store_true', default=False)
     parser.add_argument("--OT", action='store_true', default=False)
-    parser.add_argument('--GRBC_epsilon', type=float, default=1e-5)
+    parser.add_argument('--sample_noise_std', type=float, default=1e-5, help='Std of additive Gaussian noise for sample perturbation')
     parser.add_argument('--gamma_t', type=float, default=0.1)
 
     # Gaussian process
@@ -159,9 +159,8 @@ def get_fdiv_args(parser):
     
     # OOD detection
     parser.add_argument('--ood_in_dist', type=str, default='mnist', choices=['mnist', 'fashion_mnist', 'cifar10', 'cifar100'], help='In-distribution dataset for OOD detection')
-    parser.add_argument('--ood_use_imglist', type=eval, default=False, choices=[True, False], help='Use imglist-based OOD data under data_dir (see pl_data/ood_imglist.py); only cifar10/cifar100 supported in imglist mode')
+    parser.add_argument('--ood_use_imglist', type=eval, default=False, choices=[True, False], help='Use imglist-based OOD data under data_dir (see pl_data/ood_detection.py); only cifar10/cifar100 supported in imglist mode')
     parser.add_argument('--ood_base_type', type=str, default='universal', choices=['local', 'general', 'universal'], help='Base distribution type for OOD detection (built-in mode only)')
-    parser.add_argument('--ood_noise_std', type=float, default=0.1, help='Noise standard deviation for OOD detection')
     parser.add_argument('--ood_anneal_alpha_init', type=float, default=0.142857, help='Initial annealing alpha for mixup')
     parser.add_argument('--ood_anneal_gamma', type=float, default=1.0, help='Annealing gamma for alpha')
     parser.add_argument('--ood_crop_size', type=int, default=12, help='Crop size for local OOD detection')
@@ -172,7 +171,7 @@ def get_fdiv_args(parser):
     return parser
 
 def set_image_args(args):
-    # args.GRBC_epsilon = 0.
+    # args.sample_noise_std = 0.
     # args.eval_freq = 10
     args.embed_dim = 128
     args.layer_type = "conv"    # useless now
@@ -318,6 +317,9 @@ def parse_args():
             # Set OOD detection specific args
             args = set_image_args(args)
             args.data = args.ood_in_dist
+            if args.sample_noise_std == 1e-5:
+                # Keep OOD default behavior while unifying parameter name.
+                args.sample_noise_std = 0.1
             # args.dims = "128-256-512"  # Same as real_image for CNN
             args.epochs = 500
             # args.batch_size = 512
@@ -348,7 +350,7 @@ def get_save_path(args):
             key_args.extend(["rho"+str(args.rho)])
         
         if args.subtask == "ood_detection":
-            key_args.extend([args.ood_in_dist, args.ood_base_type, f"noise{args.ood_noise_std}",])
+            key_args.extend([args.ood_in_dist, args.ood_base_type, f"noise{args.sample_noise_std}",])
             if getattr(args, "ood_use_imglist", False):
                 key_args.append("imglist")
   

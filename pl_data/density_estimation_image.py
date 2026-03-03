@@ -66,7 +66,7 @@ class RealImageDataModule(DataModule):
         super().__init__(args)
         self.data_dir = args.data_dir
         self.layer_type = args.layer_type
-        self.noise_std = args.GRBC_epsilon
+        self.noise_std = args.sample_noise_std
         self.val_split = args.val_split
         if isinstance(args.gpu_id, list):
             num_gpus = len(args.gpu_id)

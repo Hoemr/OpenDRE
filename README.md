@@ -104,7 +104,7 @@ Data is read from the **data** folder (sibling to OS_DRE; path set by `--data_di
 | Mode | Description | Parameters |
 |------|-------------|------------|
 | **Built-in** | ID data from torchvision (download to `data_dir`). OOD source and eval sets fixed per ID. | `--ood_in_dist`, `--ood_base_type`, `--image_backbone`, etc. |
-| **Imglist** | ID and OOD from list files under `data_dir` (one line per `image_path label`). Benchmarks defined in `pl_data/ood_imglist.py`. | `--ood_use_imglist True`, `--ood_in_dist` (cifar10 or cifar100), `--data_dir`, `--image_backbone`, etc. |
+| **Imglist** | ID and OOD from list files under `data_dir` (one line per `image_path label`). Benchmarks defined in `pl_data/ood_detection.py`. | `--ood_use_imglist True`, `--ood_in_dist` (cifar10 or cifar100), `--data_dir`, `--image_backbone`, etc. |
 
 ### Built-in OOD (default)
 
@@ -116,7 +116,7 @@ Data is read from the **data** folder (sibling to OS_DRE; path set by `--data_di
 | CIFAR-100 OOD | CIFAR-100 | Same options. Eval: SVHN, CIFAR-10, LSUN, CelebA. | `--ood_in_dist cifar100 --ood_base_type general --image_backbone wideresnet28_10` |
 
 - **Backbone**: `--image_backbone resnet18` (MNIST/Fashion); `--image_backbone wideresnet28_10` (CIFAR, recommended).
-- **Optional**: `--ood_noise_std 0.1`, `--ood_crop_size 12` (local), `--image_dropout 0.3`.
+- **Optional**: `--sample_noise_std 0.1`, `--ood_crop_size 12` (local), `--image_dropout 0.3`.
 
 ### Imglist OOD (nearood / farood, OpenOOD layout)
 
@@ -146,7 +146,7 @@ Imglist mode uses **list files** (one line per `image_path label`) and matches t
 - **Near-OOD**: semantically closer to ID (e.g. CIFAR-100, TinyImageNet when ID is CIFAR-10).
 - **Far-OOD**: visually/semantically farther (e.g. MNIST, SVHN, Texture, Places365 when ID is CIFAR-10).
 
-In `pl_data/ood_imglist.py`, `OOD_IMGLIST_BENCHMARKS["cifar10"]["ood_eval"]` defines the evaluation OOD sets by name and list path; the same txt files are produced by OpenOOD’s download. You do not set nearood/farood via a single parameter — they are fixed by the benchmark (list of eval datasets). To add or remove OOD sets, edit `OOD_IMGLIST_BENCHMARKS` in `pl_data/ood_imglist.py`.
+In `pl_data/ood_detection.py`, `OOD_IMGLIST_BENCHMARKS["cifar10"]["ood_eval"]` defines the evaluation OOD sets by name and list path; the same txt files are produced by OpenOOD’s download. You do not set nearood/farood via a single parameter — they are fixed by the benchmark (list of eval datasets). To add or remove OOD sets, edit `OOD_IMGLIST_BENCHMARKS` in `pl_data/ood_detection.py`.
 
 **Layout after OpenOOD download**
 
@@ -218,7 +218,7 @@ python main.py fdiv_estimation --subtask ood_detection --ood_use_imglist True --
   **方式 A**：运行脚本  
   `python scripts/download_ood_benchmark.py`  
   会拉取 `benchmark_imglist` 与 `images_classic` 到当前配置的数据目录（脚本内或环境指定的目录）。  
-  **方式 B**：从 [OpenOOD](https://github.com/Jingkang50/OpenOOD) 克隆并按其文档准备 `benchmark_imglist/` 与 `images_classic/`，再放到 `{data_dir}` 下，使目录结构与 `pl_data/ood_imglist.py` 中的 `OOD_IMGLIST_BENCHMARKS`、`list_subdir`/`image_subdir` 一致（含 nearood/farood 等）。  
+  **方式 B**：从 [OpenOOD](https://github.com/Jingkang50/OpenOOD) 克隆并按其文档准备 `benchmark_imglist/` 与 `images_classic/`，再放到 `{data_dir}` 下，使目录结构与 `pl_data/ood_detection.py` 中的 `OOD_IMGLIST_BENCHMARKS`、`list_subdir`/`image_subdir` 一致（含 nearood/farood 等）。  
   启用 imglist 时请使用 `--ood_use_imglist True`，且仅支持 `cifar10`/`cifar100` 作为 ID 数据集。
 
 ## Method Configuration
@@ -293,7 +293,7 @@ python main.py fdiv_estimation --subtask ood_detection --ood_in_dist cifar10 --i
 |----------|---------|-------------|
 | `--ood_in_dist` | `mnist` | In-distribution dataset |
 | `--ood_base_type` | `universal` | Base distribution type: local, general, universal |
-| `--ood_noise_std` | 0.1 | Noise standard deviation |
+| `--sample_noise_std` | 0.1 | Noise standard deviation (unified name) |
 | `--ood_data_dir` | `../data` | Data directory |
 | `--image_backbone` | `resnet18` | Image backbone: resnet18, resnet34, resnet50, wideresnet28_10 |
 | `--image_dropout` | 0.3 | Dropout rate for WideResNet |
