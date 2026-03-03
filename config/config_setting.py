@@ -67,7 +67,7 @@ def get_common_args(parser):
     parser.add_argument("--bridge", action='store_true', default=False)
     parser.add_argument("--OT", action='store_true', default=False)
     parser.add_argument('--sample_noise_std', type=float, default=1e-5, help='Std of additive Gaussian noise for sample perturbation')
-    parser.add_argument('--gamma_t', type=float, default=0.1)
+    parser.add_argument('--gamma_t', type=float, default=0.01)
 
     # Gaussian process
     parser.add_argument("--gpp", action='store_true', default=False, help="Gaussian process prior / Gaussian Mixture / Kumaraswamy Mixture")
@@ -161,8 +161,6 @@ def get_fdiv_args(parser):
     parser.add_argument('--ood_in_dist', type=str, default='mnist', choices=['mnist', 'fashion_mnist', 'cifar10', 'cifar100'], help='In-distribution dataset for OOD detection')
     parser.add_argument('--ood_use_imglist', type=eval, default=False, choices=[True, False], help='Use imglist-based OOD data under data_dir (see pl_data/ood_detection.py); only cifar10/cifar100 supported in imglist mode')
     parser.add_argument('--ood_base_type', type=str, default='universal', choices=['local', 'general', 'universal'], help='Base distribution type for OOD detection (built-in mode only)')
-    parser.add_argument('--ood_anneal_alpha_init', type=float, default=0.142857, help='Initial annealing alpha for mixup')
-    parser.add_argument('--ood_anneal_gamma', type=float, default=1.0, help='Annealing gamma for alpha')
     parser.add_argument('--ood_crop_size', type=int, default=12, help='Crop size for local OOD detection')
  
     # Image backbone (ResNet or WideResNet for all image-related tasks)

@@ -209,7 +209,6 @@ class OutOfDistributionDetectionDataModule(DataModule):
         self.ood_in_dist = getattr(args, 'ood_in_dist', 'mnist')
         self.ood_use_imglist = getattr(args, 'ood_use_imglist', False)
         self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
-        self.ood_anneal_alpha_init = getattr(args, 'ood_anneal_alpha_init', 0.0)
         self.ood_crop_size = getattr(args, 'ood_crop_size', 12)
         self.num_workers = 0
         self.eval_ood_names = []

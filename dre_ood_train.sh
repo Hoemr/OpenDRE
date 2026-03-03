@@ -1,16 +1,14 @@
 #!/bin/bash
 # OS_DRE OOD Detection Experiments - Parallel Run Script
 # Supports configurable DRE methods and in-distribution datasets
-# Automatically iterates over all combinations of DRE methods, in-dist datasets, and base types
+# Automatically iterates over all combinations of DRE methods and in-dist datasets
 # RUN: nohup bash dre_ood_train.sh > /dev/null 2>&1 &
 
-# Configuration
-EPOCHS=1000
+# Configuration (OpenOOD-style defaults)
+EPOCHS=500
 BATCH_SIZE=1024
-LR=0.001
-NOISE_STD=0.1
-ANNEAL_ALPHA_INIT=0.142857
-ANNEAL_GAMMA=1.0
+LR=0.1
+SAMPLE_NOISE_STD=0.001  # For score method (normalized images)
 MAX_TASKS_PER_GPU=2  # Each GPU runs one task at a time
 CHECK_INTERVAL=20  # Check for available GPU every 20 seconds
 LAUNCH_WAIT=30  # Wait 30 seconds after launching before checking for next GPU
@@ -35,19 +33,15 @@ IN_DIST_DATASETS="${2:-mnist fashion_mnist}"
 # IN_DIST_DATASETS="${2:-mnist}"
 # Example: IN_DIST_DATASETS="mnist fashion_mnist cifar10"
 
-# Base types to run (local, general, universal)
-BASE_TYPES="${3:-universal}"
-# Example: BASE_TYPES="universal" or BASE_TYPES="local general universal"
-
 # Image backbone
 # Options: resnet18, resnet34, resnet50, wideresnet28_10
 # Note: resnet18 for mnist/fashion_mnist, wideresnet28_10 for cifar10/cifar100
-IMAGE_BACKBONE="${4:-resnet18}"
+IMAGE_BACKBONE="${3:-resnet18}"
 # Example: IMAGE_BACKBONE="resnet18 wideresnet28_10"
 
 # Which sub_method(s) to launch
 # Options: neural, score
-SUB_METHODS="${6:-neural score}"
+SUB_METHODS="${4:-neural score}"
 
 # Parse neural DRE methods into array (handle both quoted and unquoted input)
 if [[ "$NEURAL_DRE_METHODS" == *" "* ]]; then
@@ -68,13 +62,6 @@ if [[ "$IN_DIST_DATASETS" == *" "* ]]; then
     IFS=' ' read -ra IN_DIST_ARRAY <<< "$IN_DIST_DATASETS"
 else
     IN_DIST_ARRAY=("$IN_DIST_DATASETS")
-fi
-
-# Parse base types into array
-if [[ "$BASE_TYPES" == *" "* ]]; then
-    IFS=' ' read -ra BASE_TYPES_ARRAY <<< "$BASE_TYPES"
-else
-    BASE_TYPES_ARRAY=("$BASE_TYPES")
 fi
 
 # Parse image backbone into array
@@ -99,10 +86,8 @@ for sub_method in "${SUB_METHODS_ARRAY[@]}"; do
         neural)
             for dre_method in "${NEURAL_DRE_METHODS_ARRAY[@]}"; do
                 for in_dist in "${IN_DIST_ARRAY[@]}"; do
-                    for base_type in "${BASE_TYPES_ARRAY[@]}"; do
-                        for backbone in "${IMAGE_BACKBONE_ARRAY[@]}"; do
-                            experiments+=("$sub_method,$in_dist,$base_type,$dre_method,$backbone")
-                        done
+                    for backbone in "${IMAGE_BACKBONE_ARRAY[@]}"; do
+                        experiments+=("$sub_method,$in_dist,$dre_method,$backbone")
                     done
                 done
             done
@@ -110,8 +95,9 @@ for sub_method in "${SUB_METHODS_ARRAY[@]}"; do
         score)
             for score_method in "${SCORE_METHODS_ARRAY[@]}"; do
                 for in_dist in "${IN_DIST_ARRAY[@]}"; do
-                    # For score mode, prioritize UNet backbone
-                    experiments+=("$sub_method,$in_dist,NA,$score_method,unet")
+                    for backbone in "${IMAGE_BACKBONE_ARRAY[@]}"; do
+                        experiments+=("$sub_method,$in_dist,$score_method,$backbone")
+                    done
                 done
             done
             ;;
@@ -146,41 +132,39 @@ find_available_gpu() {
 run_experiment() {
     local sub_method=$1
     local in_dist=$2
-    local base_type=$3
-    local dre_method=$4
-    local backbone=$5
-    local gpu_id=$6
+    local dre_method=$3
+    local backbone=$4
+    local gpu_id=$5
 
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting: sub_method=$sub_method, in_dist=$in_dist, base_type=$base_type, subsub_method=$dre_method, backbone=$backbone, gpu_id=$gpu_id"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting: sub_method=$sub_method, in_dist=$in_dist, subsub_method=$dre_method, backbone=$backbone, gpu_id=$gpu_id"
 
     if [ "$sub_method" = "score" ]; then
-        # Requested score command style:
-        # python main.py ... --sub_method score --subsub_method dre_infty/d3re --condition True
-        # Plus explicitly prioritize UNet backbone.
+        # Score method command:
+        # python main.py fdiv_estimation --subtask ood_detection --sub_method score --subsub_method d3re --condition True --joint False --sample_noise_std 0.001 --ood_use_imglist True --ood_in_dist cifar10 --image_backbone resnet18 --epochs 500 --batch_size 1024 --lr 0.1 --gpu_id 4
         nohup conda run -n osdre python main.py fdiv_estimation \
             --subtask ood_detection \
-            --ood_in_dist "$in_dist" \
-            --epochs $EPOCHS \
-            --batch_size $BATCH_SIZE \
-            --lr $LR \
             --sub_method score \
             --subsub_method "$dre_method" \
             --condition True \
-            --image_backbone "$backbone" \
             --joint False \
+            --sample_noise_std $SAMPLE_NOISE_STD \
+            --ood_use_imglist True \
+            --ood_in_dist "$in_dist" \
+            --image_backbone "$backbone" \
+            --epochs $EPOCHS \
+            --batch_size $BATCH_SIZE \
+            --lr $LR \
             --gpu_id $gpu_id \
             > /dev/null 2>&1 &
     else
-        # Keep existing neural behavior unchanged
+        # Neural method command:
+        # python main.py fdiv_estimation --subtask ood_detection --sub_method neural --subsub_method nce --ood_use_imglist True --ood_in_dist cifar10 --image_backbone resnet18 --epochs 500 --batch_size 1024 --lr 0.1 --gpu_id 4
         nohup conda run -n osdre python main.py fdiv_estimation \
             --subtask ood_detection \
-            --ood_in_dist "$in_dist" \
-            --ood_base_type "$base_type" \
-            --sample_noise_std $NOISE_STD \
-            --ood_anneal_alpha_init $ANNEAL_ALPHA_INIT \
-            --ood_anneal_gamma $ANNEAL_GAMMA \
             --sub_method neural \
             --subsub_method "$dre_method" \
+            --ood_use_imglist True \
+            --ood_in_dist "$in_dist" \
             --image_backbone "$backbone" \
             --epochs $EPOCHS \
             --batch_size $BATCH_SIZE \
@@ -201,19 +185,17 @@ echo "Sub Methods: ${SUB_METHODS}"
 echo "Neural DRE Methods (subsub_method): ${NEURAL_DRE_METHODS}"
 echo "Score Methods (subsub_method): ${SCORE_METHODS}"
 echo "In-distribution Datasets: ${IN_DIST_DATASETS}"
-echo "Base Types: ${BASE_TYPES}"
 echo "Image Backbone: ${IMAGE_BACKBONE}"
 echo "Total experiments: ${#experiments[@]}"
 echo "Available GPUs: ${gpus[@]}"
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo "============================================"
 echo ""
-echo "Usage: ./dre_ood_train.sh [neural_methods] [in_dist_datasets] [base_types] [image_backbone] [score_methods] [sub_methods]"
-echo "Example: ./dre_ood_train.sh 'logistic nce rkl' 'mnist fashion_mnist' 'universal' 'resnet18' 'dre_infty d3re' 'neural score'"
+echo "Usage: ./dre_ood_train.sh [neural_methods] [in_dist_datasets] [image_backbone] [sub_methods] [score_methods]"
+echo "Example: ./dre_ood_train.sh 'logistic nce rkl' 'mnist fashion_mnist' 'resnet18' 'neural score' 'dre_infty d3re'"
 echo "Neural methods: logistic, nce, infonce, rkl, hellinger, kl, gamma, ew, pw, kulsif"
 echo "Score methods: dre_infty, d3re"
 echo "Available datasets: mnist, fashion_mnist, cifar10, cifar100"
-echo "Available base types: local, general, universal"
 echo "Available backbones: resnet18, resnet34, resnet50, wideresnet28_10"
 echo ""
 
@@ -223,7 +205,7 @@ completed=0
 
 # Process each experiment
 for exp in "${experiments[@]}"; do
-    IFS=',' read -r sub_method in_dist base_type dre_method backbone <<< "$exp"
+    IFS=',' read -r sub_method in_dist dre_method backbone <<< "$exp"
     
     # Wait for an available GPU
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for available GPU..."
@@ -236,7 +218,7 @@ for exp in "${experiments[@]}"; do
     done
     
     # Run the experiment on the available GPU
-    run_experiment "$sub_method" "$in_dist" "$base_type" "$dre_method" "$backbone" "$available_gpu"
+    run_experiment "$sub_method" "$in_dist" "$dre_method" "$backbone" "$available_gpu"
     
     completed=$((completed + 1))
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Progress: $completed/$total_experiments experiments launched"
@@ -249,4 +231,3 @@ echo "============================================"
 echo "All $total_experiments experiments launched!"
 echo "Use 'nvidia-smi' to monitor GPU usage"
 echo "Logs are saved in ./results/ directory"
-echo "============================================"

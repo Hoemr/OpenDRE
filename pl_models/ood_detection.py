@@ -38,6 +38,7 @@ def _ood_metrics(labels, scores):
         aupr_out = np.nan
     return {"auroc": auroc, "fpr95": fpr95, "aupr_in": aupr_in, "aupr_out": aupr_out, "acc": acc}
 
+
 class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
     def __init__(self, args, save_path, datamodule):
         super().__init__(args, save_path, datamodule)
@@ -45,6 +46,16 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         self.ood_base_type = getattr(args, "ood_base_type", "universal")
         self.train_loss_sum = 0.0
         self.train_loss_count = 0
+
+    def configure_optimizers(self):
+        """OpenOOD-style SGD optimizer with momentum."""
+        optimizer = torch.optim.SGD(
+            self.model.parameters(),
+            lr=getattr(self.args, "lr", 0.1),
+            momentum=getattr(self.args, "momentum", 0.9),
+            weight_decay=getattr(self.args, "weight_decay", 5e-4),
+        )
+        return {"optimizer": optimizer}
 
     def _build_sde(self, args):
         return ImageInterpXt(args=args)
@@ -72,81 +83,28 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         return {}
 
     def on_validation_epoch_end(self):
-        id_dataset = self.datamodule.train_dataset.in_dist_dataset
-        ood_datasets = self.datamodule.get_eval_ood_datasets(stage="val")
-        ood_names = getattr(self.datamodule, "eval_ood_names", None) or list(OOD_EVAL_CONFIG[self.ood_in_dist]["ood_datasets"])
-        batch_size = getattr(self.args, "test_batch_size", self.args.batch_size)
-        id_loader = DataLoader(id_dataset, batch_size=batch_size, shuffle=False)
-        id_scores = self._compute_scores_for_loader(id_loader)
-        all_aurocs, all_fpr95, all_aupr_in, all_aupr_out, all_acc = [], [], [], [], []
-        for ood_name, ood_ds in zip(ood_names, ood_datasets):
-            ood_loader = DataLoader(ood_ds, batch_size=batch_size, shuffle=False)
-            ood_scores = self._compute_scores_for_loader(ood_loader)
-            labels = np.concatenate([np.ones(len(id_scores)), np.zeros(len(ood_scores))])
-            scores = np.concatenate([id_scores, ood_scores])
-            m = _ood_metrics(labels, scores)
-            for key, val in m.items():
-                self.log("val_%s_%s" % (key, ood_name), val, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            all_aurocs.append(m["auroc"] if not np.isnan(m["auroc"]) else None)
-            all_fpr95.append(m["fpr95"] if not np.isnan(m["fpr95"]) else None)
-            all_aupr_in.append(m["aupr_in"] if not np.isnan(m["aupr_in"]) else None)
-            all_aupr_out.append(m["aupr_out"] if not np.isnan(m["aupr_out"]) else None)
-            all_acc.append(m["acc"] if not np.isnan(m["acc"]) else None)
-        mean_metrics = {}
-        for name, vals in [("auroc", all_aurocs), ("fpr95", all_fpr95), ("aupr_in", all_aupr_in), ("aupr_out", all_aupr_out), ("acc", all_acc)]:
-            valid = [v for v in vals if v is not None]
-            mean_val = np.mean(valid) if valid else float("nan")
-            self.log("val_%s_mean" % name, mean_val, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            mean_metrics[name] = mean_val
-        self._log_ood_val_to_txt(mean_metrics, ood_names, all_aurocs)
-
-    def _log_ood_val_to_txt(self, mean_metrics, ood_names, all_aurocs):
-        """Write validation metrics to training_logger (Lightning v2). Group by near-OOD / far-OOD when using imglist."""
-        if not (self.trainer and self.trainer.is_global_zero):
-            return
-        log = logging.getLogger(_TRAIN_LOGGER_NAME)
-        if not log.handlers:
-            return
-        epoch = self.trainer.current_epoch + 1
-        parts = [f"Epoch {epoch}/{self.trainer.max_epochs}"]
-        for k, v in [("AUROC", mean_metrics.get("auroc")), ("FPR95", mean_metrics.get("fpr95")),
-                     ("AUPR-IN", mean_metrics.get("aupr_in")), ("AUPR-OUT", mean_metrics.get("aupr_out")), ("ACC", mean_metrics.get("acc"))]:
-            if v is not None and not (isinstance(v, float) and np.isnan(v)):
-                parts.append(f"{k} {v:.4f}")
-            else:
-                parts.append(f"{k} nan")
-        name_to_auroc = {n: a for n, a in zip(ood_names, all_aurocs) if a is not None}
-        near_far = OOD_IMGLIST_NEAR_FAR.get(self.ood_in_dist, {}) if getattr(self.args, "ood_use_imglist", False) else {}
-        if near_far:
-            near_parts = []
-            for name in near_far.get("near", []):
-                if name in name_to_auroc:
-                    near_parts.append(f"{name} {name_to_auroc[name]:.4f}")
-            far_parts = []
-            for name in near_far.get("far", []):
-                if name in name_to_auroc:
-                    far_parts.append(f"{name} {name_to_auroc[name]:.4f}")
-            if near_parts:
-                parts.append("near-OOD: " + ", ".join(near_parts))
-            if far_parts:
-                parts.append("far-OOD: " + ", ".join(far_parts))
-        else:
-            for name, auroc in zip(ood_names, all_aurocs):
-                if auroc is not None:
-                    parts.append(f"{name} {auroc:.4f}")
-        log.info(" | ".join(parts))
+        self._evaluate_ood(stage="val")
 
     def test_step(self, batch, batch_idx):
         return {}
 
     def on_test_epoch_end(self):
-        id_dataset = self.datamodule._get_in_dist_dataset(train=True)
-        ood_datasets = self.datamodule.get_eval_ood_datasets(stage="test")
+        self._evaluate_ood(stage="test")
+
+    def _evaluate_ood(self, stage="val"):
+        """Unified OOD evaluation for validation and test stages."""
+        is_val = stage == "val"
+        id_dataset = self.datamodule.train_dataset.in_dist_dataset if is_val else self.datamodule._get_in_dist_dataset(train=True)
+        ood_datasets = self.datamodule.get_eval_ood_datasets(stage=stage)
         ood_names = getattr(self.datamodule, "eval_ood_names", None) or list(OOD_EVAL_CONFIG[self.ood_in_dist]["ood_datasets"])
         batch_size = getattr(self.args, "test_batch_size", self.args.batch_size)
+        prefix = "val" if is_val else "test"
+
         id_loader = DataLoader(id_dataset, batch_size=batch_size, shuffle=False)
         id_scores = self._compute_scores_for_loader(id_loader)
-        all_aurocs, all_fpr95, all_aupr_in, all_aupr_out, all_acc = [], [], [], [], []
+
+        # Collect metrics per OOD dataset
+        all_metrics = {"auroc": [], "fpr95": [], "aupr_in": [], "aupr_out": [], "acc": []}
         for ood_name, ood_ds in zip(ood_names, ood_datasets):
             ood_loader = DataLoader(ood_ds, batch_size=batch_size, shuffle=False)
             ood_scores = self._compute_scores_for_loader(ood_loader)
@@ -154,45 +112,74 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
             scores = np.concatenate([id_scores, ood_scores])
             m = _ood_metrics(labels, scores)
             for key, val in m.items():
-                self.log("test_%s_%s" % (key, ood_name), val, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            all_aurocs.append(m["auroc"] if not np.isnan(m["auroc"]) else None)
-            all_fpr95.append(m["fpr95"] if not np.isnan(m["fpr95"]) else None)
-            all_aupr_in.append(m["aupr_in"] if not np.isnan(m["aupr_in"]) else None)
-            all_aupr_out.append(m["aupr_out"] if not np.isnan(m["aupr_out"]) else None)
-            all_acc.append(m["acc"] if not np.isnan(m["acc"]) else None)
-        mean_metrics = {}
-        for name, vals in [("auroc", all_aurocs), ("fpr95", all_fpr95), ("aupr_in", all_aupr_in), ("aupr_out", all_aupr_out), ("acc", all_acc)]:
-            valid = [v for v in vals if v is not None]
-            mean_val = np.mean(valid) if valid else float("nan")
-            self.log("test_%s_mean" % name, mean_val, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            mean_metrics[name] = mean_val
-        self._log_ood_test_to_txt(mean_metrics, ood_names, all_aurocs)
+                self.log(f"{prefix}_{key}_{ood_name}", val, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                all_metrics[key].append(val if not np.isnan(val) else None)
 
-    def _log_ood_test_to_txt(self, mean_metrics, ood_names, all_aurocs):
-        """Write test metrics to training_logger. Group by near-OOD / far-OOD when using imglist."""
+        # Compute mean metrics
+        mean_metrics = {}
+        for name in all_metrics:
+            valid = [v for v in all_metrics[name] if v is not None]
+            mean_val = np.mean(valid) if valid else float("nan")
+            self.log(f"{prefix}_{name}_mean", mean_val, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            mean_metrics[name] = mean_val
+
+        # Compute near/far AUROC
+        name_to_auroc = {n: a for n, a in zip(ood_names, all_metrics["auroc"]) if a is not None}
+        near_auroc, far_auroc = self._compute_near_far_auroc(name_to_auroc, prefix)
+
+        # Log to txt file
+        self._log_ood_to_txt(mean_metrics, ood_names, all_metrics["auroc"], near_auroc, far_auroc, is_val=is_val)
+
+    def _compute_near_far_auroc(self, name_to_auroc, prefix):
+        """Compute and log near/far AUROC averages."""
+        near_far = OOD_IMGLIST_NEAR_FAR.get(self.ood_in_dist, {}) if getattr(self.args, "ood_use_imglist", False) else {}
+        near_auroc, far_auroc = None, None
+        if near_far:
+            near_vals = [name_to_auroc[n] for n in near_far.get("near", []) if n in name_to_auroc]
+            far_vals = [name_to_auroc[n] for n in near_far.get("far", []) if n in name_to_auroc]
+            if near_vals:
+                near_auroc = float(np.mean(near_vals))
+                self.log(f"{prefix}_near_auroc", near_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            if far_vals:
+                far_auroc = float(np.mean(far_vals))
+                self.log(f"{prefix}_far_auroc", far_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        return near_auroc, far_auroc
+
+    def _log_ood_to_txt(self, mean_metrics, ood_names, all_aurocs, near_auroc, far_auroc, is_val=True):
+        """Write OOD metrics to training_logger. Group by near-OOD / far-OOD when using imglist."""
         if not (self.trainer and self.trainer.is_global_zero):
             return
         log = logging.getLogger(_TRAIN_LOGGER_NAME)
         if not log.handlers:
             return
-        parts = ["Test"]
+
+        # Build log line
+        if is_val:
+            epoch = self.trainer.current_epoch + 1
+            parts = [f"Epoch {epoch}/{self.trainer.max_epochs}"]
+        else:
+            parts = ["Test"]
+
+        # Mean metrics
         for k, v in [("AUROC", mean_metrics.get("auroc")), ("FPR95", mean_metrics.get("fpr95")),
                      ("AUPR-IN", mean_metrics.get("aupr_in")), ("AUPR-OUT", mean_metrics.get("aupr_out")), ("ACC", mean_metrics.get("acc"))]:
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
                 parts.append(f"{k} {v:.4f}")
             else:
                 parts.append(f"{k} nan")
+
+        # near/far AUROC
+        if near_auroc is not None:
+            parts.append(f"near-AUROC {near_auroc:.4f}")
+        if far_auroc is not None:
+            parts.append(f"far-AUROC {far_auroc:.4f}")
+
+        # Per-dataset AUROC
         name_to_auroc = {n: a for n, a in zip(ood_names, all_aurocs) if a is not None}
         near_far = OOD_IMGLIST_NEAR_FAR.get(self.ood_in_dist, {}) if getattr(self.args, "ood_use_imglist", False) else {}
         if near_far:
-            near_parts = []
-            for name in near_far.get("near", []):
-                if name in name_to_auroc:
-                    near_parts.append(f"{name} {name_to_auroc[name]:.4f}")
-            far_parts = []
-            for name in near_far.get("far", []):
-                if name in name_to_auroc:
-                    far_parts.append(f"{name} {name_to_auroc[name]:.4f}")
+            near_parts = [f"{n} {name_to_auroc[n]:.4f}" for n in near_far.get("near", []) if n in name_to_auroc]
+            far_parts = [f"{n} {name_to_auroc[n]:.4f}" for n in near_far.get("far", []) if n in name_to_auroc]
             if near_parts:
                 parts.append("near-OOD: " + ", ".join(near_parts))
             if far_parts:
@@ -201,6 +188,7 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
             for name, auroc in zip(ood_names, all_aurocs):
                 if auroc is not None:
                     parts.append(f"{name} {auroc:.4f}")
+
         log.info(" | ".join(parts))
 
     def _compute_scores_for_loader(self, loader):

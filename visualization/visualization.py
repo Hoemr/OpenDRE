@@ -813,7 +813,8 @@ def visualize_integrated_variance_profiles(path_model, sample_path="./", combina
     save_path = os.path.join(sample_path, f"integrated_variance_comparison_{combination_type}.pdf")
     plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
-    
+
+# In[] Change Point Detection Statistic
 def visualize_cpd_stat(
     cp_stats: Union[np.ndarray, List[np.ndarray]],
     t_values: Optional[np.ndarray] = None,

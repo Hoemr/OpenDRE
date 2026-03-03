@@ -94,7 +94,8 @@ python main.py fdiv_estimation --subtask mutual_information --data diag_multi_ga
 python main.py fdiv_estimation --subtask change_point_detection --data cpd_text --use_simplex True --cpd_swl 64
 
 # OOD detection (see "OOD detection" section below for tasks and parameters)
-python main.py fdiv_estimation --subtask ood_detection --ood_in_dist cifar10 --image_backbone wideresnet28_10 --epochs 100 --batch_size 512
+python main.py fdiv_estimation --subtask ood_detection --sub_method neural --subsub_method nce --ood_use_imglist True --ood_in_dist cifar10 --image_backbone resnet18 --epochs 500 --batch_size 1024 --lr 0.1 --gpu_id 4 
+python main.py fdiv_estimation --subtask ood_detection --sub_method score --subsub_method d3re --condition True --joint False --ood_use_imglist True --ood_in_dist fashion_mnist --image_backbone resnet18 --epochs 500 --batch_size 1024 --lr 0.1 --gpu_id 8
 ```
 
 ## OOD detection: tasks and parameters
