@@ -158,11 +158,12 @@ run_experiment() {
             > /dev/null 2>&1 &
     else
         # Neural method command:
-        # python main.py fdiv_estimation --subtask ood_detection --sub_method neural --subsub_method nce --ood_use_imglist True --ood_in_dist cifar10 --image_backbone resnet18 --epochs 500 --batch_size 1024 --lr 0.1 --gpu_id 4
+        # python main.py fdiv_estimation --subtask ood_detection --sub_method neural --subsub_method nce --sample_noise_std 0.001 --ood_use_imglist True --ood_in_dist cifar10 --image_backbone resnet18 --epochs 500 --batch_size 1024 --lr 0.1 --gpu_id 4
         nohup conda run -n osdre python main.py fdiv_estimation \
             --subtask ood_detection \
             --sub_method neural \
             --subsub_method "$dre_method" \
+            --sample_noise_std $SAMPLE_NOISE_STD \
             --ood_use_imglist True \
             --ood_in_dist "$in_dist" \
             --image_backbone "$backbone" \

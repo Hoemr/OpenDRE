@@ -19,6 +19,33 @@ import warnings
 warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument.*")
 warnings.filterwarnings("ignore", ".*torch.meshgrid: in an upcoming release.*")
 
+
+def setup_tensor_cores():
+    """
+    Enable Tensor Cores optimization if the GPU supports it.
+    
+    Tensor Cores are available on GPUs with compute capability >= 7.0:
+    - Volta (V100), Turing (RTX 20xx, T4), Ampere (A100, A6000, RTX 30xx),
+      Hopper (H100), Ada Lovelace (RTX 40xx)
+    
+    This sets float32 matmul precision to 'high' for better performance
+    on supported hardware, while maintaining compatibility on older GPUs.
+    """
+    if not torch.cuda.is_available():
+        return
+    
+    # Get compute capability of the current device
+    device = torch.cuda.current_device()
+    major, minor = torch.cuda.get_device_capability(device)
+    compute_capability = major + minor * 0.1
+    
+    # Tensor Cores require SM >= 7.0 (Volta, Turing, Ampere, Hopper, Ada)
+    if major >= 7:
+        torch.set_float32_matmul_precision('high')
+        print(f"[Tensor Cores] Enabled on {torch.cuda.get_device_name(device)} (SM {major}.{minor})")
+    else:
+        print(f"[Tensor Cores] Not available on {torch.cuda.get_device_name(device)} (SM {major}.{minor})")
+
 def get_trainer_config(args, need_strategy=False):
     """
     Unified configuration for Trainer's accelerator/devices/strategy/sync_batchnorm.
@@ -311,6 +338,9 @@ def train_fdiv_estimation(args):
 if __name__ == "__main__":
     args = parse_args()
     set_random_seeds(args.seed)
+    
+    # Enable Tensor Cores optimization if available
+    setup_tensor_cores()
     
     # Add models directory to Python path
     current_dir = os.path.dirname(os.path.abspath(__file__))
