@@ -47,15 +47,15 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         self.train_loss_sum = 0.0
         self.train_loss_count = 0
 
-    def configure_optimizers(self):
-        """OpenOOD-style SGD optimizer with momentum."""
-        optimizer = torch.optim.SGD(
-            self.model.parameters(),
-            lr=getattr(self.args, "lr", 0.1),
-            momentum=getattr(self.args, "momentum", 0.9),
-            weight_decay=getattr(self.args, "weight_decay", 5e-4),
-        )
-        return {"optimizer": optimizer}
+    # def configure_optimizers(self):
+    #     """OpenOOD-style SGD optimizer with momentum."""
+    #     optimizer = torch.optim.SGD(
+    #         self.model.parameters(),
+    #         lr=getattr(self.args, "lr", 0.1),
+    #         momentum=getattr(self.args, "momentum", 0.9),
+    #         weight_decay=getattr(self.args, "weight_decay", 5e-4),
+    #     )
+    #     return {"optimizer": optimizer}
 
     def _build_sde(self, args):
         return ImageInterpXt(args=args)
@@ -92,13 +92,20 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         self._evaluate_ood(stage="test")
 
     def _evaluate_ood(self, stage="val"):
-        """Unified OOD evaluation for validation and test stages."""
-        is_val = stage == "val"
-        id_dataset = self.datamodule.train_dataset.in_dist_dataset if is_val else self.datamodule._get_in_dist_dataset(train=True)
+        """Unified OOD evaluation for validation and test stages.
+        
+        IMPORTANT: Uses separate ID splits for evaluation to avoid data leakage:
+        - validation: uses ID val split (val_cifar10.txt)
+        - test: uses ID test split (test_cifar10.txt)
+        
+        This ensures the model is evaluated on data NOT seen during training.
+        """
+        # Use correct ID split for evaluation (NOT training data)
+        id_dataset = self.datamodule.get_eval_id_dataset(stage=stage)
         ood_datasets = self.datamodule.get_eval_ood_datasets(stage=stage)
         ood_names = getattr(self.datamodule, "eval_ood_names", None) or list(OOD_EVAL_CONFIG[self.ood_in_dist]["ood_datasets"])
         batch_size = getattr(self.args, "test_batch_size", self.args.batch_size)
-        prefix = "val" if is_val else "test"
+        prefix = "val" if stage == "val" else "test"
 
         id_loader = DataLoader(id_dataset, batch_size=batch_size, shuffle=False)
         id_scores = self._compute_scores_for_loader(id_loader)
@@ -128,7 +135,7 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         near_auroc, far_auroc = self._compute_near_far_auroc(name_to_auroc, prefix)
 
         # Log to txt file
-        self._log_ood_to_txt(mean_metrics, ood_names, all_metrics["auroc"], near_auroc, far_auroc, is_val=is_val)
+        self._log_ood_to_txt(mean_metrics, ood_names, all_metrics["auroc"], near_auroc, far_auroc, is_val=(stage == "val"))
 
     def _compute_near_far_auroc(self, name_to_auroc, prefix):
         """Compute and log near/far AUROC averages."""

@@ -2,12 +2,14 @@
 """OOD detection datasets and DataModule (built-in + imglist unified)."""
 import os
 import random
+from PIL import Image
 
 import numpy as np
 import torch
 import torchvision.datasets as dset
 from torch.utils.data import Dataset
 from torchvision import transforms
+import torch.nn.functional as F
 
 from .base import DataModule
 
@@ -34,7 +36,7 @@ OOD_EVAL_CONFIG = {
 #   - Returns: (px, qx, 0.0) pairs for density ratio estimation
 #
 # VALIDATION/TEST (_evaluate_ood):
-#   - ID:  Same as training ID (train_cifar10.txt)
+#   - ID:  Test CIFAR-10 (test_cifar10.txt)
 #   - OOD: Multiple datasets for evaluation:
 #     - near-OOD: val (TIN-val), cifar100, tin (TIN-test)
 #     - far-OOD:  mnist, svhn
@@ -222,7 +224,6 @@ class ImglistDataset(Dataset):
         image_name = parts[0]
         label = int(parts[1]) if len(parts) > 1 else 0
         path = os.path.join(self.data_dir, image_name) if self.data_dir and not image_name.startswith("/") else image_name
-        from PIL import Image
 
         image = Image.open(path).convert("RGB")
         data = self.transform(image) if self.transform is not None else image
@@ -310,7 +311,7 @@ class OutOfDistributionDetectionDataModule(DataModule):
         self.ood_use_imglist = getattr(args, 'ood_use_imglist', False)
         self.ood_base_type = getattr(args, 'ood_base_type', 'universal')
         self.ood_crop_size = getattr(args, 'ood_crop_size', 12)
-        self.num_workers = 0
+        self.num_workers = 8
         
         # ===== EVALUATION OOD DATASETS (for validation/test) =====
         # These are set by _setup_imglist() and used in _evaluate_ood()
@@ -332,8 +333,10 @@ class OutOfDistributionDetectionDataModule(DataModule):
             )
 
     def prepare_data(self):
+        _timed_print(f"prepare_data() START, ood_use_imglist={self.ood_use_imglist}")
         # ===== DOWNLOAD DATA IF NEEDED (non-imglist mode only) =====
         if self.ood_use_imglist:
+            _timed_print("prepare_data() SKIP (imglist mode)")
             return
         if self.ood_in_dist == 'mnist':
             dset.MNIST(self.args.data_dir, train=True, download=True)
@@ -342,13 +345,16 @@ class OutOfDistributionDetectionDataModule(DataModule):
             dset.FashionMNIST(self.args.data_dir, train=True, download=True)
             dset.FashionMNIST(self.args.data_dir, train=False, download=True)
         elif self.ood_in_dist == 'cifar10':
+            _timed_print("prepare_data() calling CIFAR10 download check...")
             dset.CIFAR10(self.args.data_dir, train=True, download=True)
             dset.CIFAR10(self.args.data_dir, train=False, download=True)
         elif self.ood_in_dist == 'cifar100':
             dset.CIFAR100(self.args.data_dir, train=True, download=True)
             dset.CIFAR100(self.args.data_dir, train=False, download=True)
+        _timed_print("prepare_data() DONE")
 
     def setup(self, stage=None):
+        _timed_print(f"setup() START, stage={stage}, ood_use_imglist={self.ood_use_imglist}")
         """
         Initialize datasets for training/validation/test.
         
@@ -356,19 +362,26 @@ class OutOfDistributionDetectionDataModule(DataModule):
         For imglist mode, delegates to _setup_imglist().
         """
         if self.ood_use_imglist:
+            _timed_print("setup() -> _setup_imglist()")
             self._setup_imglist(stage=stage)
+            _timed_print("setup() DONE (imglist mode)")
             return
         
         # ===== NON-IMGLIST MODE (legacy) =====
+        _timed_print("setup() NON-IMGLIST MODE (legacy)")
         transform_train = self._get_transform(train=True)
         if (stage == "fit" or stage == "validate") or stage is None:
+            _timed_print("  Creating ID dataset (legacy mode)...")
             # Create training dataset: pairs of (ID, OOD) images
             in_dist_dataset = self._get_in_dist_dataset(train=True, transform=transform_train)
+            _timed_print("  Creating OOD dataset (legacy mode)...")
             ood_dataset = self._get_ood_dataset(train=True, transform=transform_train)
+            _timed_print("  Creating OODDetectionDataset (legacy mode)...")
             self.train_dataset = OODDetectionDataset(in_dist_dataset, ood_dataset)
             self.val_dataset = DummyDataset(input_shape=(3, 32, 32))
         if stage == "test" or stage is None:
             self.test_dataset = DummyDataset(input_shape=(3, 32, 32))
+        _timed_print("setup() DONE (legacy mode)")
 
     def _get_transform(self, train=True):
         # Prefer imglist transform settings when available.
@@ -425,16 +438,26 @@ class OutOfDistributionDetectionDataModule(DataModule):
             return dset.CIFAR100(self.args.data_dir, train=train, download=False, transform=transform)
 
     def _get_ood_dataset(self, train=True, transform=None):
+        _timed_print(f"_get_ood_dataset() START, train={train}, ood_base_type={self.ood_base_type}")
         if self.ood_base_type == 'local':
             crop_transform = self._get_crop_transform()
-            return self._get_in_dist_dataset(train=train, transform=crop_transform)
+            result = self._get_in_dist_dataset(train=train, transform=crop_transform)
         elif self.ood_base_type == 'general':
             ood_list = {'mnist': 'fashion_mnist', 'fashion_mnist': 'mnist', 'cifar10': 'svhn', 'cifar100': 'svhn'}
             ood_name = ood_list.get(self.ood_in_dist, 'svhn')
-            return self._get_ood_by_name(ood_name, train=train, transform=transform)
+            result = self._get_ood_by_name(ood_name, train=train, transform=transform)
         elif self.ood_base_type == 'universal':
             oe_file = os.path.join(self.args.data_dir, "300K_random_images.npy")
-            return OODRandomImagesDataset(oe_file, transform=transform)
+            _timed_print(f"  Loading 300K_random_images.npy from {oe_file}")
+            # Get normalization params based on ID dataset
+            norm_type = self.ood_in_dist if self.ood_in_dist in OOD_IMGLIST_NORMALIZATION else "cifar10"
+            mean, std = OOD_IMGLIST_NORMALIZATION[norm_type]
+            image_size = 32  # Standard for CIFAR/MNIST
+            result = OODRandomImagesDataset(oe_file, image_size=image_size, mean=mean, std=std)
+        else:
+            result = None
+        _timed_print(f"_get_ood_dataset() DONE")
+        return result
 
     def _get_ood_by_name(self, ood_name, train=True, transform=None):
         if transform is None:
@@ -542,6 +565,7 @@ class OutOfDistributionDetectionDataModule(DataModule):
                         benchmark_imglist/cifar10/test_mnist.txt (far-OOD)
                         benchmark_imglist/cifar10/test_svhn.txt (far-OOD)
         """
+        _timed_print(f"_setup_imglist() START, data_dir={self.args.data_dir}")
         b = self._bench
         num_classes = b["num_classes"]
         self.num_classes = num_classes
@@ -553,6 +577,7 @@ class OutOfDistributionDetectionDataModule(DataModule):
         image_root = _join_data_dir(self.args.data_dir, image_subdir)
 
         # ===== STEP 1: Load ID datasets (train/val/test) =====
+        _timed_print("STEP 1: Loading ID datasets (train/val/test)...")
         # These are used for:
         #   - train: training ID data (px in training_step)
         #   - val/test: ID data for evaluation metrics
@@ -579,13 +604,20 @@ class OutOfDistributionDetectionDataModule(DataModule):
                 "Use OpenOOD download script to get benchmark_imglist + images_classic."
                 % (train_full, os.path.abspath(self.args.data_dir))
             )
+        _timed_print(f"STEP 1 DONE: Loaded {len(self._id_datasets)} ID splits")
 
-        # Transform for OOD data (test mode: no augmentation)
+        # Transform for OOD evaluation data (test mode: no augmentation)
         transform_test = get_ood_imglist_transforms(
             "test", normalization_type=normalization_type, image_size=image_size, pre_size=pre_size
         )
+        
+        # Get normalization mean/std for OOD training dataset
+        norm_mean, norm_std = OOD_IMGLIST_NORMALIZATION.get(
+            normalization_type, OOD_IMGLIST_NORMALIZATION["cifar10"]
+        )
 
         # ===== STEP 2: Load OOD training data (for training_step) =====
+        _timed_print("STEP 2: Loading OOD training data...")
         # This is qx in the training pairs (px, qx)
         # Supports two modes:
         #   - "random": use 300K random images (no data leakage)
@@ -593,14 +625,20 @@ class OutOfDistributionDetectionDataModule(DataModule):
         ood_train_config = b.get("ood_train", "")
         if ood_train_config == "random":
             # Use random images dataset (no data leakage with eval OOD)
+            # Uses memmap + direct tensor ops for fast loading without PIL
             random_file = b.get("ood_train_random_file", "300K_random_images.npy")
             random_path = os.path.join(self.args.data_dir, random_file)
+            _timed_print(f"  Random images path: {random_path}")
             if not os.path.isfile(random_path):
                 raise FileNotFoundError(
                     "Random images file not found: %s. "
                     "Download 300K random images for OOD training." % random_path
                 )
-            ood_for_train = OODRandomImagesDataset(random_path, transform=transform_test)
+            _timed_print("  Creating OODRandomImagesDataset...")
+            ood_for_train = OODRandomImagesDataset(
+                random_path, image_size=image_size, mean=norm_mean, std=norm_std
+            )
+            _timed_print(f"  OODRandomImagesDataset created, len={len(ood_for_train)}")
         else:
             # Legacy: use imglist file
             ood_train_path = _join_data_dir(self.args.data_dir, list_subdir, ood_train_config)
@@ -610,17 +648,20 @@ class OutOfDistributionDetectionDataModule(DataModule):
                 imglist_pth=ood_train_path, data_dir=image_root, num_classes=num_classes, transform=transform_test
             )
             ood_for_train = ImglistDatasetAsTuple(ood_train_ds)
+        _timed_print("STEP 2 DONE: OOD training data loaded")
 
         # ===== STEP 3: Create training dataset =====
+        _timed_print("STEP 3: Creating OODDetectionDataset...")
         # self.train_dataset.__getitem__(idx) returns (px, qx, 0.0)
         # where px is ID image, qx is OOD image
         self.train_dataset = OODDetectionDataset(id_train, ood_for_train)
-        self.train_dataset.in_dist_dataset = id_train  # Used by _evaluate_ood for val/test ID
+        _timed_print("STEP 3 DONE: OODDetectionDataset created")
         
         self.val_dataset = DummyDataset(input_shape=(3, image_size, image_size))
         self.test_dataset = DummyDataset(input_shape=(3, image_size, image_size))
 
         # ===== STEP 4: Load OOD evaluation datasets (for validation_step/test_step) =====
+        _timed_print("STEP 4: Loading OOD evaluation datasets...")
         # These are used to compute AUROC, FPR95, etc. in _evaluate_ood()
         # For CIFAR-10: val(TIN), cifar100, tin (near-OOD) + mnist, svhn (far-OOD)
         self.eval_ood_names = []
@@ -634,6 +675,8 @@ class OutOfDistributionDetectionDataModule(DataModule):
             )
             self.eval_ood_names.append(name)
             self.eval_ood_datasets.append(ImglistDatasetAsTuple(ds))
+        _timed_print(f"STEP 4 DONE: Loaded {len(self.eval_ood_names)} OOD eval datasets")
+        _timed_print("_setup_imglist() COMPLETE")
 
 
 class DummyDataset(Dataset):
@@ -647,22 +690,121 @@ class DummyDataset(Dataset):
         return torch.zeros(self.input_shape), 0
 
 
+# class OODRandomImagesDataset(Dataset): 
+#     def __init__(self, npy_file, transform=None): 
+#         self.data = np.load(npy_file) 
+#         self.transform = transform 
+        
+#     def __len__(self): 
+#         return self.data.shape[0] 
+    
+#     def __getitem__(self, idx): 
+#         img = self.data[idx] 
+#         if isinstance(img, np.ndarray): 
+#             if img.dtype != np.uint8: 
+#                 img = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8) 
+#             img = torch.from_numpy(img).float() / 255.0 
+#             if img.dim() == 2: 
+#                 img = img.unsqueeze(0).repeat(3, 1, 1) 
+#             elif img.dim() == 3 and img.shape[0] != 3: 
+#                 img = img.permute(2, 0, 1) 
+#         return img, 0
+
+
 class OODRandomImagesDataset(Dataset):
-    def __init__(self, npy_file, transform=None):
-        self.data = np.load(npy_file)
-        self.transform = transform
+    """
+    Random images dataset for OOD training (qx in density ratio estimation).
+    
+    Optimized for fast initialization:
+    - Uses np.load(..., mmap_mode="r") - only reads metadata at init
+    - No data access in __init__ - format detection deferred to first __getitem__
+    - Direct tensor operations (no PIL) for fast per-sample processing
+    """
+    def __init__(self, npy_file, image_size=32, mean=(0.4914,0.4822,0.4465), std=(0.2470,0.2435,0.2616)):
+        _timed_print(f"OODRandomImagesDataset.__init__ START: {npy_file}")
+        
+        # mmap: only reads .npy header (shape, dtype), not actual data
+        _timed_print("  Calling np.load with mmap_mode='r'...")
+        self.data = np.load(npy_file, mmap_mode="r")
+        _timed_print(f"  np.load DONE, shape={self.data.shape}, dtype={self.data.dtype}")
+        
+        self.image_size = int(image_size)
+        self.mean = torch.tensor(mean, dtype=torch.float32).view(3,1,1)
+        self.std = torch.tensor(std, dtype=torch.float32).view(3,1,1)
+        
+        # Infer format from overall shape (no data access needed)
+        # Shape is (N, H, W, C) for HWC or (N, C, H, W) for CHW
+        shape = self.data.shape
+        if len(shape) == 3:
+            # (N, H, W) - grayscale
+            self._is_chw = False
+            self._is_grayscale = True
+        elif len(shape) == 4:
+            # Detect CHW vs HWC by comparing dim 1 and dim 3
+            # CHW: dim 1 is small (1 or 3), dim 3 is large
+            # HWC: dim 3 is small (1 or 3), dim 1 is large
+            dim1, dim3 = shape[1], shape[3]
+            if dim1 in (1, 3) and dim3 > 3:
+                self._is_chw = True
+            else:
+                self._is_chw = False
+            self._is_grayscale = (shape[3 if not self._is_chw else 1] == 1) if len(shape) == 4 else True
+        else:
+            raise ValueError(f"Unexpected data shape: {shape}")
+        
+        _timed_print(f"OODRandomImagesDataset.__init__ DONE, _is_chw={self._is_chw}")
 
     def __len__(self):
         return self.data.shape[0]
 
     def __getitem__(self, idx):
-        img = self.data[idx]
-        if isinstance(img, np.ndarray):
-            if img.dtype != np.uint8:
-                img = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8)
-            img = torch.from_numpy(img).float() / 255.0
-            if img.dim() == 2:
-                img = img.unsqueeze(0).repeat(3, 1, 1)
-            elif img.dim() == 3 and img.shape[0] != 3:
-                img = img.permute(2, 0, 1)
-        return img, 0
+        img = self.data[idx]  # Lazy load from memmap
+
+        # Handle memmap read-only buffer
+        if isinstance(img, np.ndarray) and not img.flags.writeable:
+            img = np.array(img, copy=True)
+
+        t = torch.from_numpy(img)
+
+        # Handle shape: unify to CHW format
+        if t.ndim == 2:
+            # HxW grayscale -> 1xHxW
+            t = t.unsqueeze(0)
+        elif t.ndim == 3:
+            if self._is_chw:
+                # Already CHW
+                pass
+            else:
+                # HWC -> CHW
+                t = t.permute(2, 0, 1)
+        else:
+            raise ValueError(f"Unexpected tensor shape: {tuple(t.shape)}")
+
+        # Handle channels: ensure 3 channels (RGB)
+        if t.shape[0] == 1:
+            t = t.expand(3, -1, -1)  # 1xHxW -> 3xHxW
+        elif t.shape[0] != 3:
+            raise ValueError(f"Unexpected channel count: {t.shape[0]}")
+
+        # ToTensor equivalent: uint8 -> float in [0, 1]
+        if t.dtype == torch.uint8:
+            t = t.float().div_(255.0)
+        else:
+            t = t.float()
+            # Heuristic: if mean > 1, assume [0, 255] range
+            if t.mean().item() > 1.0:
+                t = t.div_(255.0)
+
+        # Resize if needed (bilinear interpolation)
+        if t.shape[1] != self.image_size or t.shape[2] != self.image_size:
+            t = F.interpolate(
+                t.unsqueeze(0), 
+                size=(self.image_size, self.image_size),
+                mode="bilinear", 
+                align_corners=False
+            ).squeeze(0)
+
+        # Normalize (consistent with eval)
+        t = t.sub_(self.mean).div_(self.std)
+
+        return t, 0

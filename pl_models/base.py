@@ -172,7 +172,14 @@ class DensityEstimationModel(pl.LightningModule):
 class DensityRatioEstimationModel(pl.LightningModule):
     def __init__(self, args, save_path, datamodule):
         super().__init__()
-        self.save_hyperparameters()
+        print(f"[MODEL TIME] DensityRatioEstimationModel.__init__ START")
+        
+        # CRITICAL: Use ignore=["datamodule"] to prevent pickling the entire datamodule
+        # (which contains datasets, memmaps, imglists - all heavy unpicklable objects)
+        # This avoids the 30+ minute hang during hyperparameter serialization.
+        # datamodule is still accessible via self.datamodule at runtime.
+        self.save_hyperparameters(ignore=["datamodule"])
+        
         self.args = args
         self.task = args.task
         self.subtask = args.subtask
@@ -183,8 +190,12 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.decomp = args.decomp
         self.joint = args.joint
         self.eps = args.eps
+        print(f"[MODEL TIME] Calling set_basic_functions...")
         self.set_basic_functions(args)
+        print(f"[MODEL TIME] set_basic_functions DONE")
         self.set_prepare_batch()
+        
+        # Store datamodule for runtime use (NOT in hparams, won't be pickled)
         self.datamodule = datamodule
 
         self.fdiv_path = os.path.join(save_path, "fdiv")
@@ -240,9 +251,13 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.prepare_batch = prepare_batch
 
     def set_basic_functions(self, args):
+        print(f"[MODEL TIME] set_basic_functions: _build_sde...")
         self.path = self._build_sde(args)
+        print(f"[MODEL TIME] set_basic_functions: get_dr_fn...")
         self.density_ratio_fn = self.get_dr_fn()
+        print(f"[MODEL TIME] set_basic_functions: build_model...")
         self.model = self.build_model()
+        print(f"[MODEL TIME] set_basic_functions: train_step_fn...")
         self.train_epoch_end_step_fn = lambda: None
 
         if self.args.sub_method == "kernel":
@@ -258,6 +273,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
             self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.path)
         else:
             raise ValueError("Invalid sub_method %s" % self.args.sub_method)
+        print(f"[MODEL TIME] set_basic_functions DONE")
 
     def _build_model_with_image_backbone(self):
         image_backbone = getattr(self.args, "image_backbone", "resnet18")
