@@ -52,7 +52,7 @@ def get_common_args(parser):
     parser.add_argument("--eps", type=float, default=1e-5, help="t \in [eps, 1-eps]")
     parser.add_argument("--joint", type=eval, default=True, choices=[True, False])   
     parser.add_argument("--condition", type=eval, default=False, choices=[True, False]) 
-    parser.add_argument('--combination_type', type=str, default="VPSDE", help="interpolant type")  
+    parser.add_argument('--path_type', type=str, default="VP", help="interpolant type")  
     parser.add_argument('--init_weight', type=float, default=1e-2)  # init
     parser.add_argument('--final_weight', type=float, default=1e-2)  # final
     parser.add_argument('--scale', type=float, default=1., help="scale of loss terms")
@@ -69,8 +69,8 @@ def get_common_args(parser):
     parser.add_argument('--sample_noise_std', type=float, default=1e-5, help='Std of additive Gaussian noise for sample perturbation')
     parser.add_argument('--gamma_t', type=float, default=0.01)
 
-    # Gaussian process
-    parser.add_argument("--gpp", action='store_true', default=False, help="Gaussian process prior / Gaussian Mixture / Kumaraswamy Mixture")
+    # Minimum Variance Path
+    parser.add_argument("--mvp", action='store_true', default=False, help="Minimum Variance Path / Gaussian Mixture / Kumaraswamy Mixture")
     parser.add_argument('--grid_size', type=int, default=200)
     parser.add_argument('--K_gmm', type=int, default=5, help="num of components of GMM or KMM")
     parser.add_argument('--constraint_type', type=str, default="spherical", choices=["spherical", "affine"])  
@@ -201,8 +201,8 @@ def parse_args():
     args.dropout = 0 if args.condition else args.dropout
     
     # MinPV
-    args.combination_type = "gpp" if args.gpp else args.combination_type
-    args.gpp = True if args.combination_type == "gpp" else args.gpp
+    args.path_type = "mvp" if args.mvp else args.path_type
+    args.mvp = True if args.path_type == "mvp" else args.mvp
 
     if args.subsub_method == "d3re":
         args.bridge = True
@@ -223,7 +223,7 @@ def parse_args():
                'bsds300': 63, 'power': 6, 'gas': 8, 'hepmass': 21, 'miniboone': 43}
             args.d = ds_dict[args.data]
             
-            # args.combination_type = "linear"
+            # args.path_type = "linear"
             args.grad_clip = 5.
             if args.decomp:
                 args.hdim_factor = 2
@@ -334,7 +334,7 @@ def get_save_path(args):
         if args.sub_method in ["kernel", "neural"]:
             key_args.extend([args.sub_method, args.subsub_method])
         elif args.sub_method == "score":
-            key_args.extend([args.combination_type])
+            key_args.extend([args.path_type])
         
     elif args.task == "fdiv_estimation":
         if args.sub_method in ["kernel", "neural"]:
@@ -342,7 +342,7 @@ def get_save_path(args):
             key_args.extend([f"d{args.d}"])
         elif args.sub_method == "score":
             key_args.extend([f"d{args.d}"])
-            key_args.extend([args.combination_type])
+            key_args.extend([args.path_type])
             
         if args.subtask == "mutual_information":
             key_args.extend(["rho"+str(args.rho)])
@@ -370,7 +370,7 @@ def get_save_path(args):
             key_args.extend(["cond"])
         if args.OT:
             key_args.extend(["OT"])
-        if args.combination_type == "gpp":
+        if args.path_type == "mvp":
             key_args.extend([args.constraint_type, f"K_{args.K_gmm}"])
         key_args.extend([loss_type])
     

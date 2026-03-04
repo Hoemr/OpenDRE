@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+vendor/
+venv/
+__pycache__/
+.pytest_cache/
+
+# Build outputs
+dist/
+build/
+out/
+target/
+
+# Logs & temp files
+*.log
+.tmp/
+.cache/
+
+# Large data files
+*.csv
+*.json
+*.sqlite
+*.db
+
+# Git
+.git/

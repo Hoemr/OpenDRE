@@ -17,8 +17,8 @@ class DensityEstimation2DSyntheticModel(DensityEstimationModel):
                 pass
         elif self.args.sub_method == "score":
             def path_plot_fn(batch, epoch="final"):
-                vis_utils.visualize_path_function(self.path, sample_path=self.sample_path, combination_type=self.args.combination_type, constraint_type=self.args.constraint_type)
-                vis_utils.plot_integral_distributions(self.model, batch, self.sample_path, is_integral=self.args.SAI, combination_type=self.args.combination_type, epoch=epoch)
+                vis_utils.visualize_path_function(self.path, sample_path=self.sample_path, path_type=self.args.path_type, constraint_type=self.args.constraint_type)
+                vis_utils.plot_integral_distributions(self.model, batch, self.sample_path, is_integral=self.args.SAI, path_type=self.args.path_type, epoch=epoch)
         else:
             raise NotImplementedError("Submethod not implemented")
         self.path_plot_fn = path_plot_fn

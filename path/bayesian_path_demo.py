@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Demo and test code for Bayesian path (GPP, KMM): ConcatSquashExtendLinear, JointScoreModel, TestModel, visualization and training."""
+"""Demo and test code for Bayesian path (MVP, KMM): ConcatSquashExtendLinear, JointScoreModel, TestModel, visualization and training."""
 import copy
 import math
 import numpy as np
@@ -116,19 +116,19 @@ class JointScoreModel(nn.Module):
 
 
 class TestModel(nn.Module):
-    def __init__(self, beta_min=0.1, beta_max=20, eps=1e-5, combination_type="VPSDE", input_dim=1, joint=True, device="cpu", bridge=False):
+    def __init__(self, beta_min=0.1, beta_max=20, eps=1e-5, path_type="VP", input_dim=1, joint=True, device="cpu", bridge=False):
         super().__init__()
         self.beta_0, self.beta_1 = beta_min, beta_max
         self.bridge, self.gamma_t = bridge, 1.
-        self.eps, self.combination_type = eps, combination_type
+        self.eps, self.path_type = eps, path_type
         input_shape = (input_dim,)
         self.score_model = JointScoreModel(
             hidden_dims=[64, 64, 64], input_shape=input_shape,
             derivative_type="joint_derivative" if joint else "time_derivative",
         ).to(device)
-        self.gpp = True
-        if combination_type == "gpp":
-            self.gaussian_process = KMMBayesianTrajectory(
+        self.mvp = True
+        if path_type == "mvp":
+            self.bayesian_path = KMMBayesianTrajectory(
                 n_components=10, constraint_type="spherical", eps=eps, grid_size=200
             ).to(device)
         self.step = 0
@@ -148,9 +148,9 @@ class TestModel(nn.Module):
         alpha_t, beta_t, d_alpha_dt, d_beta_dt = self.get_coefficients_and_derivatives(t)
         xt = self.marginal_sample(x0, x1, t, alpha_t=alpha_t, beta_t=beta_t)
         score_x, score_t = self.score_model(t, xt)
-        if self.combination_type == "gpp":
+        if self.path_type == "mvp":
             variance = (2 * dim * d_alpha_dt**2 + x1_norm_sq * d_beta_dt**2) / (alpha_t**2 + 1e-5)
-            elbo = self.gaussian_process.elbo(x0, x1, t, variance=variance, score_reg=score_t**2)
+            elbo = self.bayesian_path.elbo(x0, x1, t, variance=variance, score_reg=score_t**2)
         if self.t_mode == "IS":
             lambda_t_time = torch.ones_like(t, device=device)
             lambda_t_data = stopgrad(2 * dim * d_alpha_dt**2 + x1_norm_sq * d_beta_dt**2)
@@ -166,7 +166,7 @@ class TestModel(nn.Module):
         diff = score_x - stopgrad(- x0 / (alpha_t + 1e-8))
         ssm_loss = torch.sum(diff ** 2, dim=tuple(range(1, diff.ndim)), keepdim=True) * lambda_t_data
         loss = time_loss + ssm_loss
-        if self.gpp:
+        if self.mvp:
             loss += -elbo
             if self.step % 100 == 0:
                 print("\n Loss: {:.2f}, time: {:.2f}, ssm: {:.2f}, elbo: {:.2f}".format(
@@ -183,18 +183,18 @@ class TestModel(nn.Module):
         return alpha_t**2 / (2 * dim * d_alpha_dt**2 + x1_norm_sq * d_beta_dt**2), alpha_t**2
 
     def get_coefficients_and_derivatives(self, t, mean=False):
-        if self.combination_type == "gpp":
-            coef = self.gaussian_process.sample_at_time(t, mode="posterior", return_derivs=True, mean=mean)
+        if self.path_type == "mvp":
+            coef = self.bayesian_path.sample_at_time(t, mode="posterior", return_derivs=True, mean=mean)
             return coef["alpha"], coef["beta"], coef["dot_alpha"], coef["dot_beta"]
-        alpha_t, beta_t = self.get_alpha_t_beta_t(t, combination_type=self.combination_type)
-        d_alpha_dt, d_beta_dt = self.get_d_alpha_beta_dt(t, alpha_t=alpha_t, beta_t=beta_t, combination_type=self.combination_type)
+        alpha_t, beta_t = self.get_alpha_t_beta_t(t, path_type=self.path_type)
+        d_alpha_dt, d_beta_dt = self.get_d_alpha_beta_dt(t, alpha_t=alpha_t, beta_t=beta_t, path_type=self.path_type)
         return alpha_t, beta_t, d_alpha_dt, d_beta_dt
 
-    def get_alpha_t_beta_t(self, t, combination_type=None):
-        ct = combination_type or self.combination_type
+    def get_alpha_t_beta_t(self, t, path_type=None):
+        ct = path_type or self.path_type
         if ct == "linear":
             return 1 - t, t
-        if ct == "VPSDE":
+        if ct == "VP":
             log_mean_coeff = -0.25 * t ** 2 * (self.beta_1 - self.beta_0) - 0.5 * t * self.beta_0
             alpha_t = torch.exp(log_mean_coeff)
             return alpha_t, torch.sqrt(1. - torch.exp(2. * log_mean_coeff))
@@ -209,18 +209,18 @@ class TestModel(nn.Module):
         if ct == "trigonometric":
             x = math.pi * t * 0.5
             return torch.cos(x), torch.sin(x)
-        if ct == "gpp":
-            coef = self.gaussian_process.sample_at_time(t, mode="posterior", return_derivs=True)
+        if ct == "mvp":
+            coef = self.bayesian_path.sample_at_time(t, mode="posterior", return_derivs=True)
             return coef["alpha"].view(-1, 1), coef["beta"].view(-1, 1)
-        raise ValueError("Combination type %s not implemented" % ct)
+        raise ValueError("Path type %s not implemented" % ct)
 
-    def get_d_alpha_beta_dt(self, t, alpha_t=None, beta_t=None, combination_type=None):
-        ct = combination_type or self.combination_type
+    def get_d_alpha_beta_dt(self, t, alpha_t=None, beta_t=None, path_type=None):
+        ct = path_type or self.path_type
         if alpha_t is None:
-            alpha_t, beta_t = self.get_alpha_t_beta_t(t, combination_type=ct)
+            alpha_t, beta_t = self.get_alpha_t_beta_t(t, path_type=ct)
         if ct == "linear":
             return torch.full_like(t, -1.), torch.ones_like(t)
-        if ct == "VPSDE":
+        if ct == "VP":
             term = 0.5 * ((self.beta_1 - self.beta_0) * t + self.beta_0)
             return -term * alpha_t, alpha_t ** 2 / (beta_t + 1e-6) * term
         if ct == "follmer":
@@ -234,10 +234,10 @@ class TestModel(nn.Module):
             return 0.5 * d_alpha_bar_dt / alpha_t, -0.5 * d_alpha_bar_dt / beta_t
         if ct == "trigonometric":
             return -math.pi / 2.0 * beta_t, math.pi / 2.0 * alpha_t
-        if ct == "gpp":
-            coef = self.gaussian_process.sample_at_time(t, mode="posterior", return_derivs=True)
+        if ct == "mvp":
+            coef = self.bayesian_path.sample_at_time(t, mode="posterior", return_derivs=True)
             return coef["dot_alpha"], coef["dot_beta"]
-        raise ValueError("Combination type %s not implemented" % ct)
+        raise ValueError("Path type %s not implemented" % ct)
 
     def marginal_sample(self, x0, x1, t, alpha_t=None, beta_t=None):
         if alpha_t is None:
@@ -245,61 +245,61 @@ class TestModel(nn.Module):
         return alpha_t * x0 + beta_t * x1
 
 
-def get_alpha_t_beta_t(t, combination_type="VPSDE"):
-    if combination_type == "linear":
+def get_alpha_t_beta_t(t, path_type="VP"):
+    if path_type == "linear":
         return 1 - t, t
-    if combination_type == "VPSDE":
+    if path_type == "VP":
         beta_0, beta_1 = 0.1, 20
         log_mean_coeff = -0.25 * t ** 2 * (beta_1 - beta_0) - 0.5 * t * beta_0
         alpha_t = np.exp(log_mean_coeff)
         return alpha_t, np.sqrt(np.maximum(1. - np.exp(2. * log_mean_coeff), 1e-8))
-    if combination_type == "cosine":
+    if path_type == "cosine":
         s = 0.008
         fn = lambda x: np.cos((x + s) / (1 + s) * np.pi / 2)
         alpha_t_bar = fn(t) / fn(0)
         return np.sqrt(alpha_t_bar), np.sqrt(np.maximum(1 - alpha_t_bar, 1e-8))
-    if combination_type == "follmer":
+    if path_type == "follmer":
         return np.sqrt(np.maximum(1 - t ** 2, 1e-8)), t
-    if combination_type == "trigonometric":
+    if path_type == "trigonometric":
         x = np.pi * t * 0.5
         return np.cos(x), np.sin(x)
-    raise ValueError("Not implemented combination type: %s" % combination_type)
+    raise ValueError("Not implemented path type: %s" % path_type)
 
 
-def get_d_alpha_beta_dt(t, alpha_t, beta_t, combination_type="VPSDE"):
-    if combination_type == "linear":
+def get_d_alpha_beta_dt(t, alpha_t, beta_t, path_type="VP"):
+    if path_type == "linear":
         return -np.ones_like(t), np.ones_like(t)
-    if combination_type == "VPSDE":
+    if path_type == "VP":
         beta_0, beta_1 = 0.1, 20
         term = 0.5 * ((beta_1 - beta_0) * t + beta_0)
         return -term * alpha_t, (alpha_t ** 2 / beta_t) * term
-    if combination_type == "cosine":
+    if path_type == "cosine":
         s, const = 0.008, np.pi * 0.5 / 1.008
         d_alpha_bar_dt = -np.sin((t + s) * const) * const / np.cos(s * const)
         return 0.5 * d_alpha_bar_dt / alpha_t, -0.5 * d_alpha_bar_dt / beta_t
-    if combination_type == "follmer":
+    if path_type == "follmer":
         return -t / alpha_t, np.ones_like(t)
-    if combination_type == "trigonometric":
+    if path_type == "trigonometric":
         return -np.pi / 2.0 * beta_t, np.pi / 2.0 * alpha_t
-    raise ValueError("Not implemented combination type: %s" % combination_type)
+    raise ValueError("Not implemented path type: %s" % path_type)
 
 
 def visualize_path_function(model, num_samples, prior_traj=None, post_traj=None, name="alpha", t_grid=None, sample_path="./"):
     if prior_traj is None:
-        prior_traj = model.gaussian_process.sample_trajectories(mode="prior")
-        post_traj = model.gaussian_process.sample_trajectories(mode="posterior")
-        t_grid = model.gaussian_process.grid.cpu()
+        prior_traj = model.bayesian_path.sample_trajectories(mode="prior")
+        post_traj = model.bayesian_path.sample_trajectories(mode="posterior")
+        t_grid = model.bayesian_path.grid.cpu()
     alpha_prior = prior_traj[name].detach().cpu()
     alpha_post = post_traj[name].detach().cpu()
     ylabel = {"alpha": "$\\alpha_t$", "beta": "$\\beta_t$", "gamma": "$\\gamma_t$"}[name]
     plt.figure(figsize=(8, 6))
-    methods = ['linear', 'VPSDE', 'cosine', 'follmer', 'trigonometric']
-    colors = {'linear': 'green', 'VPSDE': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
-    labels = {'linear': 'Linear', 'VPSDE': 'VPSDE', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
+    methods = ['linear', 'VP', 'cosine', 'follmer', 'trigonometric']
+    colors = {'linear': 'green', 'VP': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
+    labels = {'linear': 'Linear', 'VP': 'VP', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
     t_grid_np = t_grid.cpu().numpy() if hasattr(t_grid, 'cpu') else t_grid
     if name != "gamma":
         for m in methods:
-            ma, mb = get_alpha_t_beta_t(t_grid_np, combination_type=m)
+            ma, mb = get_alpha_t_beta_t(t_grid_np, path_type=m)
             if name == "alpha":
                 plt.plot(t_grid_np, ma, color=colors[m], lw=2, linestyle='-', label=labels[m])
             elif name == "beta":
@@ -324,25 +324,25 @@ def calculate_simplified_variance(t, alpha_t, beta_t, dot_alpha_t, dot_beta_t, g
     return (2 * dot_alpha_t**2 + dot_beta_t**2) / (alpha_t**2 + epsilon)
 
 
-def plot_variance_profiles(path_model, combination_type="VPSDE", bridge=False, gamma=1.0):
+def plot_variance_profiles(path_model, path_type="VP", bridge=False, gamma=1.0):
     fig, ax = plt.subplots(figsize=(8, 6))
-    if combination_type == "gpp":
-        prior_traj = path_model.gaussian_process.sample_trajectories(mode="prior", return_derivs=True)
-        post_traj = path_model.gaussian_process.sample_trajectories(mode="posterior", return_derivs=True)
-        t_grid = path_model.gaussian_process.grid.cpu()
+    if path_type == "mvp":
+        prior_traj = path_model.bayesian_path.sample_trajectories(mode="prior", return_derivs=True)
+        post_traj = path_model.bayesian_path.sample_trajectories(mode="posterior", return_derivs=True)
+        t_grid = path_model.bayesian_path.grid.cpu()
     else:
         eps = 1e-5
         t_grid = np.linspace(eps, 1 - eps, 500)
-    methods = ['linear', 'VPSDE', 'cosine', 'follmer', 'trigonometric']
-    colors = {'linear': 'green', 'VPSDE': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
-    labels = {'linear': 'Linear', 'VPSDE': 'VPSDE', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
+    methods = ['linear', 'VP', 'cosine', 'follmer', 'trigonometric']
+    colors = {'linear': 'green', 'VP': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
+    labels = {'linear': 'Linear', 'VP': 'VP', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
     t_grid_np = t_grid.cpu().numpy() if hasattr(t_grid, 'cpu') else t_grid
     for method in methods:
-        alpha, beta = get_alpha_t_beta_t(t_grid_np, combination_type=method)
-        dot_alpha, dot_beta = get_d_alpha_beta_dt(t_grid_np, alpha, beta, combination_type=method)
+        alpha, beta = get_alpha_t_beta_t(t_grid_np, path_type=method)
+        dot_alpha, dot_beta = get_d_alpha_beta_dt(t_grid_np, alpha, beta, path_type=method)
         variance = calculate_simplified_variance(t_grid_np, alpha, beta, dot_alpha, dot_beta, bridge=bridge, gamma=gamma)
         ax.plot(t_grid_np, variance, label=labels[method], color=colors[method], linewidth=2.5)
-    if combination_type == "gpp":
+    if path_type == "mvp":
         alpha = post_traj["alpha"].detach().cpu().numpy()
         beta = post_traj["beta"].detach().cpu().numpy()
         dot_alpha = post_traj["dot_alpha"].detach().cpu().numpy()
@@ -395,17 +395,17 @@ def train(model, batch_size=500, device="cpu", epoch_num=1000):
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = TestModel(combination_type="gpp", device=device)
+    model = TestModel(path_type="mvp", device=device)
     train(model, batch_size=1000, device=device, epoch_num=1000)
     num_samples = 5000
-    prior_traj = model.gaussian_process.sample_trajectories(mode="prior")
-    post_traj = model.gaussian_process.sample_trajectories(mode="posterior")
-    t_grid = model.gaussian_process.grid.cpu().numpy()
+    prior_traj = model.bayesian_path.sample_trajectories(mode="prior")
+    post_traj = model.bayesian_path.sample_trajectories(mode="posterior")
+    t_grid = model.bayesian_path.grid.cpu().numpy()
     visualize_path_function(model, num_samples, prior_traj, post_traj, name="alpha", t_grid=t_grid)
     visualize_path_function(model, num_samples, prior_traj, post_traj, name="beta", t_grid=t_grid)
-    plot_variance_profiles(model, combination_type="gpp")
+    plot_variance_profiles(model, path_type="mvp")
     t_points = torch.tensor([[0.1], [0.3], [0.5], [0.7], [0.7], [0.9]], device=device)
-    samples = model.gaussian_process.sample_at_time(t_points, mode="posterior")
+    samples = model.bayesian_path.sample_at_time(t_points, mode="posterior")
     print("============================================================")
     print("Sampled alpha: %s" % samples['alpha'].squeeze().tolist())
     print("Sampled beta: %s" % samples['beta'].squeeze().tolist())

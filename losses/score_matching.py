@@ -105,12 +105,12 @@ class ScoreMatchingTrainStepFn(nn.Module):
         self.final_weight = args.final_weight
         
         self.SAI = args.SAI
-        self.gpp = args.gpp
+        self.mvp = args.mvp
         self.step = 0
 
         # bridge 
         self.bridge = args.bridge
-        self.combination_type = args.combination_type
+        self.path_type = args.path_type
         
         # decomp
         self.decomp = getattr(args, "decomp", False)
@@ -140,7 +140,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         else:
             annealing_total_steps = int(self.total_step * 0.5)
             
-        update_freq = 1000 if self.gpp else 1000000
+        update_freq = 1000 if self.mvp else 1000000
         self.t_sampler = TimeSampler(
                     weights_fn=weights_fn,
                     uniform_eps=self.eps,
@@ -330,7 +330,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         # score_reg = score_t ** 2
         score_reg = 0.
         variance = self.path.get_score_var(t, x0, x1)[0]
-        elbo = self.path.gaussian_process.elbo(x0, x1, t, variance=variance, score_reg=score_reg)
+        elbo = self.path.bayesian_path.elbo(x0, x1, t, variance=variance, score_reg=score_reg)
         
         weight = 1. / time_score_var.mean()
         return self.adaptive_loss_weighting([loss * weight, -elbo * weight])
@@ -453,9 +453,9 @@ class ScoreMatchingTrainStepFn(nn.Module):
         loss = time_loss
         
         ####################
-        # KMM (gpp, Gaussian process prior)
+        # KMM (mvp, Minimum Variance Path)
         ####################
-        if self.gpp:
+        if self.mvp:
             loss = self._apply_kmm_regularization(loss, score_t, x0, x1, time_score_var, batch_size)
 
         return {"loss": loss, "target_cond_time_score": target_cond_time_score, "fk_xt": fk_xt, 
@@ -494,9 +494,9 @@ class ScoreMatchingTrainStepFn(nn.Module):
         loss = time_loss + ssm_loss
         
         ####################
-        # KMM (gpp, Gaussian process prior)
+        # KMM (mvp, Minimum Variance Path)
         ####################
-        if self.gpp:
+        if self.mvp:
             loss = self._apply_kmm_regularization(loss, score_t, x0, x1, time_score_var, batch_size)
             
         return {"loss": loss, "ssm_loss": ssm_loss, "time_loss": time_loss, "fk_xt": fk_xt, 

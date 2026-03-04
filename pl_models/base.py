@@ -156,7 +156,7 @@ class DensityEstimationModel(pl.LightningModule):
         if self.args.sub_method == "kernel":
             self.automatic_optimization = False
             return []
-        if self.args.combination_type == "gpp":
+        if self.args.path_type == "mvp":
             optimizer = optim.AdamW([
                 {"params": self.model.parameters(), "lr": self.args.lr, "weight_decay": 1e-5},
                 {"params": self.train_step_fn.parameters(), "lr": self.args.lr, "weight_decay": 0},
@@ -388,7 +388,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
             vis_utils.plot_integral_distributions(
                 self.model, px, self.sample_path,
                 is_integral=self.args.SAI,
-                combination_type=self.args.combination_type,
+                path_type=self.args.path_type,
                 epoch="final"
             )
         return step_output
@@ -416,12 +416,12 @@ class DensityRatioEstimationModel(pl.LightningModule):
         vis_utils.visualize_fdiv(self.args, self.fdiv_db, self.fdiv_true_db, savefig=self.fdiv_path)
         vis_utils.visualize_path_function(
             self.path, sample_path=self.sample_path,
-            combination_type=self.args.combination_type,
+            path_type=self.args.path_type,
             constraint_type=self.args.constraint_type
         )
         vis_utils.visualize_variance_profiles(
             self.path, sample_path=self.sample_path,
-            combination_type=self.args.combination_type
+            path_type=self.args.path_type
         )
         with open(os.path.join(self.metrics_dir, "metrics.p"), "wb") as f:
             pickle.dump({
@@ -454,16 +454,16 @@ class DensityRatioEstimationModel(pl.LightningModule):
             vis_utils.plot_integral_distributions(
                 self.model, px, self.sample_path,
                 is_integral=self.args.SAI,
-                combination_type=self.args.combination_type,
+                path_type=self.args.path_type,
                 epoch="final"
             )
         vis_utils.visualize_variance_profiles(
             self.path, sample_path=self.sample_path,
-            combination_type=self.args.combination_type
+            path_type=self.args.path_type
         )
         vis_utils.visualize_integrated_variance_profiles(
             self.path, sample_path=self.sample_path,
-            combination_type=self.args.combination_type
+            path_type=self.args.path_type
         )
         for key, value in all_metrics.items():
             if isinstance(value, (int, float)):
@@ -477,7 +477,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
         if self.args.sub_method == "kernel":
             self.automatic_optimization = False
             return []
-        if self.args.combination_type == "gpp":
+        if self.args.path_type == "mvp":
             optimizer = optim.AdamW([
                 {"params": self.model.parameters(), "lr": self.args.lr, "weight_decay": 1e-5},
                 {"params": self.train_step_fn.parameters(), "lr": self.args.lr, "weight_decay": 0},

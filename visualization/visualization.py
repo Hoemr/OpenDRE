@@ -597,7 +597,7 @@ def get_integral_values(model, x_batch, num_t=100, method='fast', is_integral=Fa
 
     return u_0_t, u_t_t, t_values
     
-def plot_integral_distributions(model, batch, sample_path, is_integral=False, combination_type="VPSDE", epoch=None):
+def plot_integral_distributions(model, batch, sample_path, is_integral=False, path_type="VP", epoch=None):
     """
     Calculate and visualize the integral trajectory distributions for the entire batch
     
@@ -622,16 +622,16 @@ def plot_integral_distributions(model, batch, sample_path, is_integral=False, co
     )
     
 # In[] Illustration for path function
-def visualize_path_function(path_model, sample_path="./", combination_type="gpp", constraint_type="spherical"):
-    methods = ['linear', 'VPSDE', 'cosine', 'follmer', 'trigonometric']   
-    colors = {'linear': 'green', 'VPSDE': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
-    labels = {'linear': 'Linear', 'VPSDE': 'VPSDE', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
+def visualize_path_function(path_model, sample_path="./", path_type="mvp", constraint_type="spherical"):
+    methods = ['linear', 'VP', 'cosine', 'follmer', 'trigonometric']   
+    colors = {'linear': 'green', 'VP': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
+    labels = {'linear': 'Linear', 'VP': 'VP', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
     
     # get data    
-    if combination_type == "gpp":
-        prior_traj = path_model.gaussian_process.sample_trajectories(mode="prior")
-        post_traj = path_model.gaussian_process.sample_trajectories(mode="posterior")
-        t_grid = path_model.gaussian_process.grid
+    if path_type == "mvp":
+        prior_traj = path_model.bayesian_path.sample_trajectories(mode="prior")
+        post_traj = path_model.bayesian_path.sample_trajectories(mode="posterior")
+        t_grid = path_model.bayesian_path.grid
         
         pickle_save_path = os.path.join(sample_path, f"trajectories.p")
         with open(pickle_save_path, 'wb') as f:
@@ -646,7 +646,7 @@ def visualize_path_function(path_model, sample_path="./", combination_type="gpp"
     
     method_data = {}
     for m in methods:
-        alpha, beta = path_model.get_alpha_t_beta_t(t_grid, combination_type=m)
+        alpha, beta = path_model.get_alpha_t_beta_t(t_grid, path_type=m)
         method_data[m] = {
             'alpha': alpha.cpu(),
             'beta': beta.cpu()
@@ -659,8 +659,8 @@ def visualize_path_function(path_model, sample_path="./", combination_type="gpp"
         for m in methods:
             plt.plot(t_grid.cpu(), method_data[m][name].view(t_grid.shape), color=colors[m], lw=2, linestyle='-', label=labels[m])
         
-        # gpp
-        if combination_type == "gpp":
+        # mvp
+        if path_type == "mvp":
             # alpha_prior = prior_traj[name].detach().cpu()
             alpha_post = post_traj[name].detach().cpu()
             # plt.plot(t_grid.cpu(), alpha_prior.view(t_grid.shape), 'b-', lw=2.5, label='MinPV (prior, ours)')
@@ -678,36 +678,36 @@ def visualize_path_function(path_model, sample_path="./", combination_type="gpp"
         plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0)
         plt.close()
 
-def visualize_variance_profiles(path_model, sample_path="./", combination_type="VPSDE"):
+def visualize_variance_profiles(path_model, sample_path="./", path_type="VP"):
     """
     Generates and saves the plot comparing variance profiles of different schedules.
     """
     fig, ax = plt.subplots(figsize=(8, 6))
     
-    if combination_type == "gpp":
-        prior_traj = path_model.gaussian_process.sample_trajectories(mode="prior", return_derivs=True)
-        post_traj = path_model.gaussian_process.sample_trajectories(mode="posterior", return_derivs=True)
-        t_grid = path_model.gaussian_process.grid
+    if path_type == "mvp":
+        prior_traj = path_model.bayesian_path.sample_trajectories(mode="prior", return_derivs=True)
+        post_traj = path_model.bayesian_path.sample_trajectories(mode="posterior", return_derivs=True)
+        t_grid = path_model.bayesian_path.grid
         
     else:
         eps = 1e-5  # Time grid, clipped to avoid division by zero in some derivatives (e.g., Follmer)
         t_grid = torch.linspace(eps, 1-eps, 500).view(-1, 1)
     
-    methods = ['linear', 'VPSDE', 'cosine', 'follmer', 'trigonometric']
-    colors = {'linear': 'green', 'VPSDE': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
-    labels = {'linear': 'Linear', 'VPSDE': 'VPSDE', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
+    methods = ['linear', 'VP', 'cosine', 'follmer', 'trigonometric']
+    colors = {'linear': 'green', 'VP': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
+    labels = {'linear': 'Linear', 'VP': 'VP', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
     
     # Baseline methods
     for method in methods:
-        coefficients_fn, derivatives_fn = path_model.get_coefficients_and_derivatives_fns(combination_type=method)
+        coefficients_fn, derivatives_fn = path_model.get_coefficients_and_derivatives_fns(path_type=method)
         alpha, beta = coefficients_fn(t_grid)
         dot_alpha, dot_beta = derivatives_fn(t_grid, alpha, beta)
 
         variance = path_model.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
         ax.plot(t_grid.detach().cpu(), variance.view(t_grid.shape).detach().cpu().log(), label=labels[method], color=colors[method], linewidth=2.5)
         
-    # gpp method
-    if combination_type == "gpp":
+    # mvp method
+    if path_type == "mvp":
         alpha = post_traj["alpha"]
         beta = post_traj["beta"]
         dot_alpha = post_traj["dot_alpha"]
@@ -728,32 +728,32 @@ def visualize_variance_profiles(path_model, sample_path="./", combination_type="
     ax.text(0.95, variance.detach().cpu().log().mean(), 'Potential Instability', rotation=90, verticalalignment='bottom', color='red', alpha=0.7, fontsize=14)
 
     plt.tight_layout()
-    save_path = os.path.join(sample_path, f"variance_comparison_{combination_type}.pdf")
+    save_path = os.path.join(sample_path, f"variance_comparison_{path_type}.pdf")
     plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
 
-def visualize_integrated_variance_profiles(path_model, sample_path="./", combination_type="VPSDE"):
+def visualize_integrated_variance_profiles(path_model, sample_path="./", path_type="VP"):
     """
     Generates and saves the plot comparing integrated variance profiles of different schedules.
     """
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    if combination_type == "gpp":
-        prior_traj = path_model.gaussian_process.sample_trajectories(mode="prior", return_derivs=True)
-        post_traj = path_model.gaussian_process.sample_trajectories(mode="posterior", return_derivs=True)
-        t_grid = path_model.gaussian_process.grid
+    if path_type == "mvp":
+        prior_traj = path_model.bayesian_path.sample_trajectories(mode="prior", return_derivs=True)
+        post_traj = path_model.bayesian_path.sample_trajectories(mode="posterior", return_derivs=True)
+        t_grid = path_model.bayesian_path.grid
     else:
         eps = 1e-5
         t_grid = torch.linspace(eps, 1 - eps, 200).view(-1, 1)
 
-    methods = ['linear', 'VPSDE', 'cosine', 'follmer', 'trigonometric']
-    colors = {'linear': 'green', 'VPSDE': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
-    labels = {'linear': 'Linear', 'VPSDE': 'VPSDE', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
+    methods = ['linear', 'VP', 'cosine', 'follmer', 'trigonometric']
+    colors = {'linear': 'green', 'VP': 'black', 'cosine': 'orange', 'follmer': 'pink', 'trigonometric': 'purple'}
+    labels = {'linear': 'Linear', 'VP': 'VP', 'cosine': 'Cosine', 'follmer': 'Follmer', 'trigonometric': 'Trigonometric'}
 
     cutoff = 3
     # Baseline methods
     for method in methods:
-        coefficients_fn, derivatives_fn = path_model.get_coefficients_and_derivatives_fns(combination_type=method)
+        coefficients_fn, derivatives_fn = path_model.get_coefficients_and_derivatives_fns(path_type=method)
         alpha, beta = coefficients_fn(t_grid)
         dot_alpha, dot_beta = derivatives_fn(t_grid, alpha, beta)
 
@@ -775,8 +775,8 @@ def visualize_integrated_variance_profiles(path_model, sample_path="./", combina
         ax.plot(t_tensor.numpy()[cutoff:-cutoff], log_integrated_variance.numpy()[cutoff:-cutoff], 
                 label=labels[method], color=colors[method], linewidth=2.5)
 
-    # gpp method
-    if combination_type == "gpp":
+    # mvp method
+    if path_type == "mvp":
         alpha = post_traj["alpha"]
         beta = post_traj["beta"]
         dot_alpha = post_traj["dot_alpha"]
@@ -810,7 +810,7 @@ def visualize_integrated_variance_profiles(path_model, sample_path="./", combina
             color='red', alpha=0.7, fontsize=14)
 
     plt.tight_layout()
-    save_path = os.path.join(sample_path, f"integrated_variance_comparison_{combination_type}.pdf")
+    save_path = os.path.join(sample_path, f"integrated_variance_comparison_{path_type}.pdf")
     plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
 

@@ -349,21 +349,21 @@ class InterpXt(Path):
         
         self.sample_noise_std = args.sample_noise_std
         self.bridge = args.bridge
-        self.combination_type = args.combination_type  # e.g., "linear", "VPSDE", "cosine"
+        self.path_type = args.path_type  # e.g., "linear", "VP", "cosine"
         self.gamma_t = args.gamma_t  # in fact is gamma^2
         self.joint = True if self.args.energy else args.joint
         
         self.OT = args.OT
         if self.OT:
             self.ot_sampler = OTPlanSampler(method="sinkhorn")
-            if self.combination_type != "linear":
-                raise ValueError(f"OT is {self.OT} and combination_type is {self.combination_type}, not linear")
+            if self.path_type != "linear":
+                raise ValueError(f"OT is {self.OT} and path_type is {self.path_type}, not linear")
         else:
             self.ot_sampler = None
-            
-        self.gpp = args.gpp  # Gaussian Process Prior
-        if self.gpp:
-            self.gaussian_process = BayesianPath.KMMBayesianTrajectory(
+
+        self.mvp = args.mvp  # Minimum Variance Path
+        if self.mvp:
+            self.bayesian_path = BayesianPath.KMMBayesianTrajectory(
                 n_components=args.K_gmm, 
                 constraint_type=args.constraint_type, 
                 eps=args.eps, 
@@ -395,14 +395,14 @@ class InterpXt(Path):
         elif self.data_ndim == 4:
             self.inner_product_fn = lambda x, y: (x * y).sum(dim=(1, 2, 3), keepdim=True)
         
-    def get_coefficients_and_derivatives_fns(self, combination_type):
-        if combination_type == "linear":
+    def get_coefficients_and_derivatives_fns(self, path_type):
+        if path_type == "linear":
             def coefficients_fn(t):
                 return 1 - t, t   # alpha_t, beta_t
             def derivatives_fn(t, alpha_t=None, beta_t=None):
                 return - torch.ones_like(t), torch.ones_like(t)
             
-        elif combination_type == "VPSDE":
+        elif path_type == "VP":
             def coefficients_fn(t):
                 log_mean_coeff = -0.25 * t ** 2 * (self.beta_1 - self.beta_0) - 0.5 * t * self.beta_0
                 alpha_t = torch.exp(log_mean_coeff)
@@ -414,13 +414,13 @@ class InterpXt(Path):
                 d_beta_dt = alpha_t ** 2 / (beta_t + 1e-6) * term_common
                 return d_alpha_dt, d_beta_dt
             
-        elif combination_type == "follmer":
+        elif path_type == "follmer":
             def coefficients_fn(t):
                 return torch.sqrt(1 - t ** 2), t
             def derivatives_fn(t, alpha_t=None, beta_t=None):
                 return -t / (torch.sqrt(1 - t**2) + 1e-6), torch.ones_like(t)
             
-        elif combination_type == "cosine":
+        elif path_type == "cosine":
             def coefficients_fn(t):
                 s = torch.tensor(0.008, dtype=t.dtype, device=t.device)
                 fn_t = torch.cos((t + s) / (1 + s) * math.pi / 2)
@@ -440,7 +440,7 @@ class InterpXt(Path):
                 d_beta_dt = -0.5 * d_alpha_bar_dt / beta_t
                 return d_alpha_dt, d_beta_dt
             
-        elif combination_type == "trigonometric":
+        elif path_type == "trigonometric":
             def coefficients_fn(t):
                 x = math.pi * t * 0.5
                 alpha_t = torch.cos(x)
@@ -452,33 +452,33 @@ class InterpXt(Path):
                 d_beta_dt = pi_half * alpha_t
                 return d_alpha_dt, d_beta_dt
             
-        elif combination_type == "gpp":   # Gaussian Process Prior
+        elif path_type == "mvp":   # Gaussian Process Prior
             def coefficients_fn(t):
-                coefficients = self.gaussian_process.sample_at_time(t, mode="posterior", return_derivs=True)
+                coefficients = self.bayesian_path.sample_at_time(t, mode="posterior", return_derivs=True)
                 alpha_t = coefficients["alpha"]
                 beta_t = coefficients["beta"]
                 return alpha_t, beta_t
             def derivatives_fn(t, alpha_t=None, beta_t=None):
-                coefficients = self.gaussian_process.sample_at_time(t, mode="posterior", return_derivs=True)
+                coefficients = self.bayesian_path.sample_at_time(t, mode="posterior", return_derivs=True)
                 d_alpha_dt = coefficients["dot_alpha"]
                 d_beta_dt = coefficients["dot_beta"]
                 return d_alpha_dt, d_beta_dt
             
         else:
-            raise ValueError(f"Combination type {self.combination_type} not implemented in InterpXt.")
+            raise ValueError(f"Path type {self.path_type} not implemented in InterpXt.")
         
         return coefficients_fn, derivatives_fn
 
     def set_coefficients_and_derivatives_fns(self):
         # for interpolant: xt = alpha_t x0 + beta_t x1
         # coefficients: alpha_t and beta_t; derivatives: d_alpha_dt and d_beta_dt
-        coefficients_fn, derivatives_fn = self.get_coefficients_and_derivatives_fns(combination_type=self.combination_type)
+        coefficients_fn, derivatives_fn = self.get_coefficients_and_derivatives_fns(path_type=self.path_type)
         self.coefficients_fn = coefficients_fn
         self.derivatives_fn = derivatives_fn
         
-        if self.combination_type == "gpp":
+        if self.path_type == "mvp":
             def coefficients_and_derivatives_fns(t):
-                coefficients = self.gaussian_process.sample_at_time(t, mode="posterior", return_derivs=True)
+                coefficients = self.bayesian_path.sample_at_time(t, mode="posterior", return_derivs=True)
                 alpha_t = coefficients["alpha"]
                 beta_t = coefficients["beta"]
                 d_alpha_dt = coefficients["dot_alpha"]
@@ -582,7 +582,7 @@ class InterpXt(Path):
     
     def set_score_var_fns(self, bridge=False):
         def default_score_var_fn(t, x0=None, x1=None, x0_norm_sq=1., x1_norm_sq=1., x0x1_norm_sq=1., 
-                            alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, combination_type=None):
+                            alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, path_type=None):
             if alpha_t is None:
                 alpha_t, beta_t, d_alpha_dt, d_beta_dt = self.get_coefficients_and_derivatives(t)
             if x1 is None:
@@ -601,7 +601,7 @@ class InterpXt(Path):
             return time_score_var, data_score_var  
         
         def bridge_score_var_fn(t, x0=None, x1=None, x0_norm_sq=None, x1_norm_sq=None, x0x1_norm_sq=None, 
-                            alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, combination_type=None):
+                            alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, path_type=None):
             if alpha_t is None:
                 alpha_t, beta_t, d_alpha_dt, d_beta_dt = self.get_coefficients_and_derivatives(t)
             if x1 is None:
@@ -661,11 +661,11 @@ class InterpXt(Path):
             self.score_target_fn = default_joint_score_target if joint else default_time_score_target
     
     ###########################################################################################
-    def get_alpha_t_beta_t(self, t, combination_type=None):
-        if combination_type is None:
+    def get_alpha_t_beta_t(self, t, path_type=None):
+        if path_type is None:
             return self.coefficients_fn(t)
         else:
-            coefficients_fn, derivatives_fn = self.get_coefficients_and_derivatives_fns(combination_type=combination_type)
+            coefficients_fn, derivatives_fn = self.get_coefficients_and_derivatives_fns(path_type=path_type)
             return coefficients_fn(t)
       
     def get_d_alpha_beta_dt(self, t, alpha_t=None, beta_t=None):
@@ -675,15 +675,15 @@ class InterpXt(Path):
         return self.coefficients_and_derivatives_fns(t)
     
     def get_weights_denoise(self, t, x0=None, x1=None, x0_norm_sq=None, x1_norm_sq=None, x0x1_norm_sq=None, 
-                            alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, combination_type=None):
+                            alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, path_type=None):
         # weight is inversely proportional to variance, only used for variance-based importance sampling
         time_score_var, data_score_var = self.score_var_fn(t, x0=x0, x1=x1, x0_norm_sq=x0_norm_sq, x1_norm_sq=x1_norm_sq, x0x1_norm_sq=x0x1_norm_sq, 
-                            alpha_t=alpha_t, beta_t=beta_t, d_alpha_dt=d_alpha_dt, d_beta_dt=d_beta_dt, combination_type=combination_type)
+                            alpha_t=alpha_t, beta_t=beta_t, d_alpha_dt=d_alpha_dt, d_beta_dt=d_beta_dt, path_type=path_type)
         return 1. / time_score_var.view(-1, 1), 1. / data_score_var.view(-1, 1)
     
     def get_score_var(self, t, x0=None, x1=None, x0_norm_sq=None, x1_norm_sq=None, x0x1_norm_sq=None, 
-                            alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, combination_type=None):
-        return self.score_var_fn(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt, combination_type)
+                            alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, path_type=None):
+        return self.score_var_fn(t, x0, x1, x0_norm_sq, x1_norm_sq, x0x1_norm_sq, alpha_t, beta_t, d_alpha_dt, d_beta_dt, path_type)
 
     def get_score_target(self, t, x0=None, x1=None, x0_norm_sq=None, x1_norm_sq=None, x0x1_norm_sq=None, 
                                alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, dim=None):
@@ -739,9 +739,9 @@ class ImageInterpXt(InterpXt):
             return tensor.view(-1, 1, 1, 1)
         return tensor
 
-    def get_alpha_t_beta_t(self, t, combination_type=None):
+    def get_alpha_t_beta_t(self, t, path_type=None):
         """Get alpha_t and beta_t reshaped for image broadcasting"""
-        alpha_t, beta_t = super().get_alpha_t_beta_t(t, combination_type=combination_type)
+        alpha_t, beta_t = super().get_alpha_t_beta_t(t, path_type=path_type)
         return self._reshape_for_image(alpha_t), self._reshape_for_image(beta_t)
     
     def get_d_alpha_beta_dt(self, t, alpha_t=None, beta_t=None):

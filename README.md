@@ -226,12 +226,12 @@ python main.py fdiv_estimation --subtask ood_detection --ood_use_imglist True --
 
 ### Score Estimation Methods (`--sub_method score`)
 
-| Combination Type | Description | Flag |
+| Path Type | Description | Flag |
 |-----------------|-------------|------|
-| `VPSDE` | Variance Preserving SDE | Default |
-| `subVPSDE` | Sub-Variance Preserving SDE | `--combination_type subVPSDE` |
+| `VP` | Variance Preserving SDE | Default |
+| `subVP` | Sub-Variance Preserving SDE | `--path_type subVP` |
 | `bridge` | Bridge Matching | `--bridge` |
-| `gpp` | Gaussian Process Prior | `--gpp` |
+| `mvp` | Mimimum Variance Path | `--mvp` |
 | `OT` | Optimal Transport | `--OT` |
 | `SAI` | Secant Alignment Identity | `--SAI` |
 

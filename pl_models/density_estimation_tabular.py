@@ -18,7 +18,7 @@ class DensityEstimationTabularModel(DensityEstimationModel):
         return {"NLL": val_nll, "nfe": val_nfe}
 
     def on_validation_epoch_end(self, outputs=None):
-        vis_utils.visualize_path_function(self.path, sample_path=self.sample_path, combination_type=self.args.combination_type, constraint_type=self.args.constraint_type)
+        vis_utils.visualize_path_function(self.path, sample_path=self.sample_path, path_type=self.args.path_type, constraint_type=self.args.constraint_type)
 
     def test_step(self, batch, batch_idx):
         start_time = time.time()

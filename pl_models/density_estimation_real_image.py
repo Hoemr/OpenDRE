@@ -185,7 +185,7 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
             vis_utils.plot_integral_distributions(
                 self.model, batch, self.sample_path,
                 is_integral=self.args.SAI,
-                combination_type=self.args.combination_type,
+                path_type=self.args.path_type,
                 epoch="final"
             )
         return {"NLL": nll, "nfe": val_nfe}
@@ -193,12 +193,12 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
     def on_validation_epoch_end(self, outputs=None):
         vis_utils.visualize_path_function(
             self.path, sample_path=self.sample_path,
-            combination_type=self.args.combination_type,
+            path_type=self.args.path_type,
             constraint_type=self.args.constraint_type
         )
         vis_utils.visualize_variance_profiles(
             self.path, sample_path=self.sample_path,
-            combination_type=self.args.combination_type
+            path_type=self.args.path_type
         )
 
     def test_step(self, batch, batch_idx):
@@ -216,7 +216,7 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
         if self.args.sub_method == "kernel":
             self.automatic_optimization = False
             return []
-        if self.args.combination_type == "gpp":
+        if self.args.path_type == "mvp":
             optimizer = optim.AdamW([
                 {"params": self.model.parameters(), "lr": self.args.lr, "weight_decay": 1e-5},
                 {"params": self.train_step_fn.parameters(), "lr": self.args.lr, "weight_decay": 0},
