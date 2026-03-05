@@ -172,7 +172,6 @@ class DensityEstimationModel(pl.LightningModule):
 class DensityRatioEstimationModel(pl.LightningModule):
     def __init__(self, args, save_path, datamodule):
         super().__init__()
-        print(f"[MODEL TIME] DensityRatioEstimationModel.__init__ START")
         
         # CRITICAL: Use ignore=["datamodule"] to prevent pickling the entire datamodule
         # (which contains datasets, memmaps, imglists - all heavy unpicklable objects)
@@ -190,9 +189,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.decomp = args.decomp
         self.joint = args.joint
         self.eps = args.eps
-        print(f"[MODEL TIME] Calling set_basic_functions...")
         self.set_basic_functions(args)
-        print(f"[MODEL TIME] set_basic_functions DONE")
         self.set_prepare_batch()
         
         # Store datamodule for runtime use (NOT in hparams, won't be pickled)
