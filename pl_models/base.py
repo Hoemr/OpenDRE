@@ -248,13 +248,9 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.prepare_batch = prepare_batch
 
     def set_basic_functions(self, args):
-        print(f"[MODEL TIME] set_basic_functions: _build_sde...")
         self.path = self._build_sde(args)
-        print(f"[MODEL TIME] set_basic_functions: get_dr_fn...")
         self.density_ratio_fn = self.get_dr_fn()
-        print(f"[MODEL TIME] set_basic_functions: build_model...")
         self.model = self.build_model()
-        print(f"[MODEL TIME] set_basic_functions: train_step_fn...")
         self.train_epoch_end_step_fn = lambda: None
 
         if self.args.sub_method == "kernel":

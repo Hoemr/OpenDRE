@@ -662,27 +662,6 @@ class DummyDataset(Dataset):
         return torch.zeros(self.input_shape), 0
 
 
-# class OODRandomImagesDataset(Dataset): 
-#     def __init__(self, npy_file, transform=None): 
-#         self.data = np.load(npy_file) 
-#         self.transform = transform 
-        
-#     def __len__(self): 
-#         return self.data.shape[0] 
-    
-#     def __getitem__(self, idx): 
-#         img = self.data[idx] 
-#         if isinstance(img, np.ndarray): 
-#             if img.dtype != np.uint8: 
-#                 img = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8) 
-#             img = torch.from_numpy(img).float() / 255.0 
-#             if img.dim() == 2: 
-#                 img = img.unsqueeze(0).repeat(3, 1, 1) 
-#             elif img.dim() == 3 and img.shape[0] != 3: 
-#                 img = img.permute(2, 0, 1) 
-#         return img, 0
-
-
 class OODRandomImagesDataset(Dataset):
     """
     Random images dataset for OOD training (qx in density ratio estimation).

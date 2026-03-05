@@ -206,6 +206,11 @@ def parse_args():
 
     if args.subsub_method == "d3re":
         args.bridge = True
+    if args.subsub_method == "osdre":
+        args.decomp = True
+    if args.decomp:
+        args.sub_method = "score"
+        args.subsub_method == "osdre"
     
     # ISA
     args.IA = True if args.aligned_ratio == 0.15 else args.IA
@@ -329,25 +334,19 @@ def parse_args():
 def get_save_path(args):
     loss_type = "joint" if args.joint else "time"
     key_args = [args.method]
-    
+    key_args.extend([args.sub_method, args.subsub_method])
+    if args.sub_method == "score":
+        key_args.extend([args.path_type])
     if args.task == "likelihood_estimation":
-        if args.sub_method in ["kernel", "neural"]:
-            key_args.extend([args.sub_method, args.subsub_method])
-        elif args.sub_method == "score":
-            key_args.extend([args.path_type])
+        pass
         
     elif args.task == "fdiv_estimation":
-        if args.sub_method in ["kernel", "neural"]:
-            key_args.extend([args.sub_method, args.subsub_method])
-            key_args.extend([f"d{args.d}"])
-        elif args.sub_method == "score":
-            key_args.extend([f"d{args.d}"])
-            key_args.extend([args.path_type])
+        key_args.extend([f"d{args.d}"])
             
         if args.subtask == "mutual_information":
             key_args.extend(["rho"+str(args.rho)])
         
-        if args.subtask == "ood_detection":
+        elif args.subtask == "ood_detection":
             key_args.extend([args.ood_in_dist, args.ood_base_type, f"noise{args.sample_noise_std}",])
             if getattr(args, "ood_use_imglist", False):
                 key_args.append("imglist")
@@ -360,11 +359,10 @@ def get_save_path(args):
             key_args.extend(["bridge", str(args.gamma_t)])
     
         if args.decomp:
-            auxiliary_loss = "na" if not args.auxiliary_loss else "aux"
             shape_type = None if args.shape_type == "uniform" else args.shape_type
-            key_args.extend(["dc", shape_type, args.polynomials, args.noise_type, "K"+str(args.K_decomp), auxiliary_loss])
+            key_args.extend([shape_type, args.polynomials, args.noise_type, "K"+str(args.K_decomp)])
         elif args.SAI:
-            key_args.extend(["sai", args.t_mode, f"ratio{args.aligned_ratio}"])
+            key_args.extend([args.t_mode, f"ratio{args.aligned_ratio}"])
     
         if args.condition:
             key_args.extend(["cond"])
