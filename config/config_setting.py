@@ -206,11 +206,11 @@ def parse_args():
 
     if args.subsub_method == "d3re":
         args.bridge = True
-    if args.subsub_method == "osdre":
+    if args.subsub_method == "os_dre":
         args.decomp = True
     if args.decomp:
         args.sub_method = "score"
-        args.subsub_method == "osdre"
+        args.subsub_method == "os_dre"
     
     # ISA
     args.IA = True if args.aligned_ratio == 0.15 else args.IA

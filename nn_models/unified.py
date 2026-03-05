@@ -12,6 +12,8 @@ import polynomials.polynomials as Pk
 from pl_data import DATA_SHAPES
 from layers.activations import NONLINEARITIES, INIT_METHODS, ACTIVATION_TYPE_MAP, ConvNormSilu
 from layers.blocks import FusedConvBlock
+
+
 class UnifiedModel(nn.Module):
     """
     A unified model that can handle both image and non-image data with different architectures and tasks.
@@ -65,7 +67,7 @@ class UnifiedModel(nn.Module):
                                            args, norm, use_spectral_norm, dynamic)
         elif data_type == 'image':
             self._build_image_architecture(in_channels, hidden_channels, embed_dim, 
-                                         nonlinearity, dropout, args)
+                                         nonlinearity, dropout)
         
         # Determine forward method based on model configuration to avoid repeated if statements
         if model_type in ['joint_score', 'decomp_joint_score']:
@@ -239,15 +241,13 @@ class UnifiedModel(nn.Module):
             )
     
     def _build_image_architecture(self, in_channels, hidden_channels, embed_dim, 
-                                nonlinearity, dropout, args):
+                                nonlinearity, dropout):
         """Build architecture for image data."""
         self.in_channels = in_channels
         self.hidden_channels = hidden_channels
         self.embed_dim = embed_dim
-        self.args = args
         self.joint = args.joint if args else False
         self.num_time_head = getattr(args, 'num_time_head', 1)
-        self.K = getattr(args, 'K', 300) if args else 300
         self.time_act = getattr(args, 'time_act', 'leakyrelu')
         
         # Time embedding
@@ -355,10 +355,12 @@ class UnifiedModel(nn.Module):
         else:
             raise ValueError(f"Unsupported backbone: {self.backbone}")
         
-        backbone_out_dim = hidden_channels[-1]
+        backbone_out_dim = hidden_channels[-1]  # 512 for ResNet18
         
         if self.model_type == 'decomp_joint_score':
             # Time head for decomposition - controlled by num_time_head
+            # Input: [B, backbone_out_dim], Output: [B, K]
+            # NOTE: ResNet backbone already outputs flattened [B, 512], no need for pooling
             time_head_layers = []
             for _ in range(getattr(args, 'num_time_head', 1) - 1):
                 time_head_layers.extend([
@@ -367,7 +369,7 @@ class UnifiedModel(nn.Module):
                 ])
             time_head_layers.extend([
                 nn.Linear(backbone_out_dim, self.K),
-                nn.AdaptiveAvgPool2d(1),
+                # REMOVED: nn.AdaptiveAvgPool2d(1) - backbone already outputs 1D features
                 self._get_activation(self.time_act) if self.time_act != "identity" else nn.Identity()
             ])
             self.time_head = nn.Sequential(*time_head_layers)
@@ -479,14 +481,11 @@ class UnifiedModel(nn.Module):
         if x.shape[1] == 1 and self.in_channels == 3:
             x = x.repeat(1, 3, 1, 1)
         
+        # backbone_net outputs [B, backbone_out_dim] (already flattened)
         features = self.backbone_net(x)
         
-        # Process features through time head
+        # time_head outputs [B, K]
         f_k = self.time_head(features)
-        if f_k.dim() == 4:
-            f_k = f_k.squeeze(-1).squeeze(-1)
-        elif f_k.dim() == 3:
-            f_k = f_k.squeeze(-1)
         return f_k
     
     def compute_fk(self, x):
@@ -570,11 +569,10 @@ class UnifiedModel(nn.Module):
 
     def _compute_s_t_resnet_decomp(self, t, features, t_emb):
         """Compute s_t for ResNet decomposition models."""
-        f_k = self.time_head(features)
-        if f_k.dim() == 4:
-            f_k = f_k.squeeze(-1).squeeze(-1)
-        elif f_k.dim() == 3:
-            f_k = f_k.squeeze(-1)
+        # features: [B, backbone_out_dim] (already flattened from backbone)
+        # time_head output: [B, K]
+        f_k = self.time_head(features)  # [B, K]
+        
         g_k = self.Pk(t)   # Shape: (..., K)
         s_t = torch.sum(f_k * g_k, dim=-1, keepdim=True)  # Shape: (..., 1)
         self.set_fk(f_k)

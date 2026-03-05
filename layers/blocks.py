@@ -201,27 +201,42 @@ class ResidualBlockWithTime(nn.Module):
 # ---------------------------------------------------------------------------
 
 class BasicBlock(nn.Module):
+    """
+    BasicBlock with pre-activation style (matching OpenOOD).
+    
+    Pre-activation: BN -> ReLU -> Conv, shortcut has no activation.
+    This improves gradient flow and is better for small images (32x32).
+    """
     expansion = 1
 
     def __init__(self, in_channels, out_channels, stride=1, downsample=None):
         super(BasicBlock, self).__init__()
+        self.bn1 = nn.BatchNorm2d(in_channels)
+        self.relu1 = nn.ReLU(inplace=True)
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
         self.downsample = downsample
+        self.equalInOut = (in_channels == out_channels and stride == 1)
 
     def forward(self, x):
-        identity = x
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = F.relu(out)
-        out = self.conv2(out)
-        out = self.bn2(out)
-        if self.downsample is not None:
-            identity = self.downsample(x)
+        if not self.equalInOut:
+            # When dimensions change, apply BN-ReLU to input for shortcut path
+            out = self.relu1(self.bn1(x))
+            out = self.relu2(self.bn2(self.conv1(out)))
+            out = self.conv2(out)
+            if self.downsample is not None:
+                identity = self.downsample(x)
+            else:
+                identity = x
+        else:
+            # When dimensions match, shortcut is direct
+            out = self.relu1(self.bn1(x))
+            out = self.relu2(self.bn2(self.conv1(out)))
+            out = self.conv2(out)
+            identity = x
         out += identity
-        out = F.relu(out)
         return out
 
 
@@ -256,17 +271,28 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
+    """
+    ResNet for small images (32x32) matching OpenOOD style.
+    
+    Key differences from standard ResNet:
+    1. No initial MaxPool (preserves spatial info for small images)
+    2. Uses pre-activation BasicBlock
+    3. Final BN-ReLU before pooling
+    """
     def __init__(self, block, layers, out_dim=1, num_classes=1000):
         super(ResNet, self).__init__()
         self.in_channels = 64
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
-        self.relu = F.relu
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+        # NOTE: Removed MaxPool for 32x32 images (matches OpenOOD)
         self.layer1 = self._make_layer(block, 64, layers[0])
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        # Final BN-ReLU for pre-activation style
+        self.bn_final = nn.BatchNorm2d(512 * block.expansion)
+        self.relu_final = nn.ReLU(inplace=True)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, out_dim)
         for m in self.modules():
@@ -293,11 +319,14 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
-        x = self.maxpool(x)
+        # No maxpool for 32x32 images
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+        # Final BN-ReLU before pooling (pre-activation style)
+        x = self.bn_final(x)
+        x = self.relu_final(x)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
