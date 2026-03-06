@@ -19,6 +19,25 @@ from pl_data import SPECS, DATA_SHAPES
 import visualization.visualization as vis_utils
 from sampling import sampling
 
+def make_mixture_mb(px, qx, beta: float):
+    """
+    Build m_beta samples in-batch: m = (1-beta)p + beta q
+    px, qx: [B, C, H, W]
+    return mx ~ m_beta, shape same as px
+    """
+    B = px.size(0)
+    # sample from p using a different ID sample within the batch
+    perm = torch.randperm(B, device=px.device)
+    # avoid fixed points if possible
+    if B > 1 and torch.any(perm == torch.arange(B, device=px.device)):
+        perm = (perm + 1) % B
+    px2 = px[perm]
+
+    # Bernoulli(beta): choose q with prob beta else p
+    mask = (torch.rand(B, 1, 1, 1, device=px.device) < beta)
+    mx = torch.where(mask, qx, px2)
+    return mx
+
 
 class DensityEstimationModel(pl.LightningModule):
     def __init__(self, args, save_path):
@@ -237,14 +256,20 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     qx = torch.cat([x, y_shuffled], dim=1)
                     return px, qx, true_mi
         else:
-            def prepare_batch(batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
-                px, qx, true_mi = batch
-                if self.subtask == "ood_detection" and self.training:
-                    noise_std = getattr(self.args, "sample_noise_std", 0.0)
+            if self.subtask == "ood_detection" and self.training:
+                noise_std = getattr(self.args, "sample_noise_std", 0.0)
+                beta = getattr(self.args, "relative_ratio", 0.2)
+                def prepare_batch(batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
+                    px, qx, true_mi = batch
+                    qx = make_mixture_mb(px, qx, beta)
                     if noise_std > 0:
                         px = px + torch.randn_like(px) * noise_std
                         qx = qx + torch.randn_like(qx) * noise_std
-                return px, qx, true_mi
+                    return px, qx, true_mi
+            else:
+                def prepare_batch(batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
+                    px, qx, true_mi = batch
+                    return px, qx, true_mi
         self.prepare_batch = prepare_batch
 
     def set_basic_functions(self, args):
@@ -291,7 +316,8 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     polynomials=self.args.polynomials,
                     noise_type=self.args.noise_type,
                     backbone=image_backbone,
-                    dropout=image_dropout
+                    dropout=image_dropout,
+                    nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
                 )
             else:
                 return base_models.ImageJointScoreModel(
@@ -300,7 +326,8 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     hidden_channels=hidden_channels,
                     embed_dim=self.args.embed_dim,
                     backbone=image_backbone,
-                    dropout=image_dropout
+                    dropout=image_dropout,
+                    nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
                 )
         else:
             hidden_dims = list(map(int, self.args.dims.split("-")))

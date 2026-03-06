@@ -11,7 +11,7 @@ from estimators import SOLVER_DICT, QUAD_DICT, SOLVER_DICT_SCIPY
 
 SOLVERS = [*SOLVER_DICT_SCIPY.keys(), *SOLVER_DICT.keys(), *QUAD_DICT.keys()]
 SUB_METHODS = ["score", "neural", "kernel"]
-SUBSUB_METHODS = {"score": ["dre_infty", "d3re", "os_dre", "isa_dre"], 
+SUBSUB_METHODS = {"score": ["dre_infty", "d3re", "osdre", "isadre"], 
                   "neural": ["kulsif", "logistic", "nce", "infonce", "rkl", "hellinger", "kl", "gamma", "ew", "pw"], 
                   "kernel": []}
 
@@ -162,9 +162,12 @@ def get_fdiv_args(parser):
     parser.add_argument('--ood_use_imglist', type=eval, default=False, choices=[True, False], help='Use imglist-based OOD data under data_dir (see pl_data/ood_detection.py); only cifar10/cifar100 supported in imglist mode')
     parser.add_argument('--ood_base_type', type=str, default='universal', choices=['local', 'general', 'universal'], help='Base distribution type for OOD detection (built-in mode only)')
     parser.add_argument('--ood_crop_size', type=int, default=12, help='Crop size for local OOD detection')
+    parser.add_argument('--ood_train', type=str, default=None, help='Override OOD training source for imglist mode: "selfgen" (q from ID transforms), "random", or path; default uses benchmark config')
  
     # Image backbone (ResNet or WideResNet for all image-related tasks)
     parser.add_argument('--image_backbone', type=str, default='unet', choices=['unet', 'resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'], help='Backbone network for image-based tasks (OOD detection, real images, etc.)')
+    parser.add_argument('--image_backbone_norm', type=str, default='batchnorm', choices=['batchnorm', 'groupnorm'], help='Norm layer in image backbone: batchnorm or groupnorm (groupnorm often more stable for small batches / OOD)')
+    parser.add_argument('--image_backbone_num_groups', type=int, default=8, help='Number of groups for GroupNorm when image_backbone_norm=groupnorm')
     parser.add_argument('--image_dropout', type=float, default=0.3, help='Dropout rate for WideResNet backbone')
     return parser
 
@@ -206,15 +209,22 @@ def parse_args():
 
     if args.subsub_method == "d3re":
         args.bridge = True
-    if args.subsub_method == "os_dre":
+    if args.subsub_method == "osdre":
         args.decomp = True
     if args.decomp:
         args.sub_method = "score"
-        args.subsub_method == "os_dre"
+        args.subsub_method == "osdre"
     
     # ISA
+    if args.subsub_method == "isadre":
+        args.sub_method = "score"
+        args.IA = True
+        args.aligned_ratio = 0.15
     args.IA = True if args.aligned_ratio == 0.15 else args.IA
     args.aligned_ratio = 0.15 if args.IA else args.aligned_ratio
+    if args.IA or args.aligned_ratio == 0.15:
+        args.sub_method = "score"
+        args.subsub_method = "isadre"
     
     # Energy modeling
     args.joint = False if args.energy else args.joint
@@ -320,11 +330,11 @@ def parse_args():
             # Set OOD detection specific args
             args = set_image_args(args)
             args.data = args.ood_in_dist
-            if args.sample_noise_std == 1e-5:
-                # Keep OOD default behavior while unifying parameter name.
-                args.sample_noise_std = 0.1
+            # if args.sample_noise_std == 1e-5:
+            #     # Keep OOD default behavior while unifying parameter name.
+            #     args.sample_noise_std = 0.1
             # args.dims = "128-256-512"  # Same as real_image for CNN
-            args.epochs = 500
+            # args.epochs = 500
             # args.batch_size = 512
             # args.eval_freq = 10
             args.reload_interval = args.epochs
@@ -371,6 +381,7 @@ def get_save_path(args):
         if args.path_type == "mvp":
             key_args.extend([args.constraint_type, f"K_{args.K_gmm}"])
         key_args.extend([loss_type])
+    key_args.extend([f"seed{args.seed}"])
     
     save_path = f'./results/{args.task}/{args.subtask}/' + f'{args.data}/' + '_'.join(filter(None, key_args)) 
     return save_path

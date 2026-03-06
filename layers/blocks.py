@@ -200,22 +200,40 @@ class ResidualBlockWithTime(nn.Module):
 # ResNet and WideResNet (image backbones)
 # ---------------------------------------------------------------------------
 
+def _make_norm2d(norm_type, num_channels, num_groups=8):
+    """Return a 2D norm layer: BatchNorm2d or GroupNorm."""
+    if norm_type == "groupnorm":
+        return nn.GroupNorm(min(num_groups, num_channels), num_channels)
+    return nn.BatchNorm2d(num_channels)
+
+
+def _make_activation(nonlinearity):
+    """Return inplace activation for ResNet blocks: ReLU or LeakyReLU."""
+    if (nonlinearity or "").lower() == "leakyrelu":
+        return nn.LeakyReLU(0.01, inplace=True)
+    return nn.ReLU(inplace=True)
+
+
 class BasicBlock(nn.Module):
     """
     BasicBlock with pre-activation style (matching OpenOOD).
     
-    Pre-activation: BN -> ReLU -> Conv, shortcut has no activation.
-    This improves gradient flow and is better for small images (32x32).
+    Pre-activation: Norm -> Act -> Conv, shortcut has no activation.
+    Supports BatchNorm or GroupNorm, ReLU or LeakyReLU via norm_layer and activation.
     """
     expansion = 1
 
-    def __init__(self, in_channels, out_channels, stride=1, downsample=None):
+    def __init__(self, in_channels, out_channels, stride=1, downsample=None, norm_layer=None, activation=None):
         super(BasicBlock, self).__init__()
-        self.bn1 = nn.BatchNorm2d(in_channels)
-        self.relu1 = nn.ReLU(inplace=True)
+        if norm_layer is None:
+            norm_layer = lambda c: nn.BatchNorm2d(c)
+        if activation is None:
+            activation = nn.ReLU(inplace=True)
+        self.bn1 = norm_layer(in_channels)
+        self.relu1 = activation
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.relu2 = nn.ReLU(inplace=True)
+        self.bn2 = norm_layer(out_channels)
+        self.relu2 = activation
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
         self.downsample = downsample
         self.equalInOut = (in_channels == out_channels and stride == 1)
@@ -243,30 +261,35 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, in_channels, out_channels, stride=1, downsample=None):
+    def __init__(self, in_channels, out_channels, stride=1, downsample=None, norm_layer=None, activation=None):
         super(Bottleneck, self).__init__()
+        if norm_layer is None:
+            norm_layer = lambda c: nn.BatchNorm2d(c)
+        if activation is None:
+            activation = nn.ReLU(inplace=True)
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.bn1 = norm_layer(out_channels)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.bn2 = norm_layer(out_channels)
         self.conv3 = nn.Conv2d(out_channels, out_channels * self.expansion, kernel_size=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(out_channels * self.expansion)
+        self.bn3 = norm_layer(out_channels * self.expansion)
         self.downsample = downsample
+        self.activation = activation
 
     def forward(self, x):
         identity = x
         out = self.conv1(x)
         out = self.bn1(out)
-        out = F.relu(out)
+        out = self.activation(out)
         out = self.conv2(out)
         out = self.bn2(out)
-        out = F.relu(out)
+        out = self.activation(out)
         out = self.conv3(out)
         out = self.bn3(out)
         if self.downsample is not None:
             identity = self.downsample(x)
         out += identity
-        out = F.relu(out)
+        out = self.activation(out)
         return out
 
 
@@ -277,42 +300,38 @@ class ResNet(nn.Module):
     Key differences from standard ResNet:
     1. No initial MaxPool (preserves spatial info for small images)
     2. Uses pre-activation BasicBlock
-    3. Final BN-ReLU before pooling
+    3. Final norm-act before pooling
+    norm_type: "batchnorm" or "groupnorm". nonlinearity: "relu" or "leakyrelu".
     """
-    def __init__(self, block, layers, out_dim=1, num_classes=1000):
+    def __init__(self, block, layers, out_dim=1, num_classes=1000, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
         super(ResNet, self).__init__()
         self.in_channels = 64
+        norm_layer = lambda c: _make_norm2d(norm_type, c, num_groups)
+        self._activation = _make_activation(nonlinearity)
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        # NOTE: Removed MaxPool for 32x32 images (matches OpenOOD)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        # Final BN-ReLU for pre-activation style
-        self.bn_final = nn.BatchNorm2d(512 * block.expansion)
-        self.relu_final = nn.ReLU(inplace=True)
+        self.bn1 = norm_layer(64)
+        self.relu = self._activation
+        self.layer1 = self._make_layer(block, 64, layers[0], norm_layer, self._activation)
+        self.layer2 = self._make_layer(block, 128, layers[1], norm_layer, self._activation, stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], norm_layer, self._activation, stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], norm_layer, self._activation, stride=2)
+        self.bn_final = norm_layer(512 * block.expansion)
+        self.relu_final = self._activation
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, out_dim)
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+        _init_resnet_weights(self, nonlinearity)
 
-    def _make_layer(self, block, out_channels, blocks, stride=1):
+    def _make_layer(self, block, out_channels, blocks, norm_layer, activation, stride=1):
         downsample = None
         if stride != 1 or self.in_channels != out_channels * block.expansion:
             downsample = nn.Sequential(
                 nn.Conv2d(self.in_channels, out_channels * block.expansion, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels * block.expansion),
+                norm_layer(out_channels * block.expansion),
             )
-        layer_list = [block(self.in_channels, out_channels, stride, downsample)]
+        layer_list = [block(self.in_channels, out_channels, stride, downsample, norm_layer=norm_layer, activation=activation)]
         self.in_channels = out_channels * block.expansion
         for _ in range(1, blocks):
-            layer_list.append(block(self.in_channels, out_channels))
+            layer_list.append(block(self.in_channels, out_channels, norm_layer=norm_layer, activation=activation))
         return nn.Sequential(*layer_list)
 
     def forward(self, x):
@@ -333,26 +352,40 @@ class ResNet(nn.Module):
         return x
 
 
-def ResNet18(out_dim=1):
-    return ResNet(BasicBlock, [2, 2, 2, 2], out_dim=out_dim)
+def _init_resnet_weights(module, nonlinearity="relu"):
+    """Kaiming init for Conv2d; init for BatchNorm2d/GroupNorm."""
+    for m in module.modules():
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu" if nonlinearity == "relu" else "leaky_relu", a=0.01)
+        elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
 
 
-def ResNet34(out_dim=1):
-    return ResNet(BasicBlock, [3, 4, 6, 3], out_dim=out_dim)
+def ResNet18(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
+    return ResNet(BasicBlock, [2, 2, 2, 2], out_dim=out_dim, norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups)
 
 
-def ResNet50(out_dim=1):
-    return ResNet(Bottleneck, [3, 4, 6, 3], out_dim=out_dim)
+def ResNet34(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
+    return ResNet(BasicBlock, [3, 4, 6, 3], out_dim=out_dim, norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups)
+
+
+def ResNet50(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
+    return ResNet(Bottleneck, [3, 4, 6, 3], out_dim=out_dim, norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups)
 
 
 class WideResNetBasicBlock(nn.Module):
-    def __init__(self, in_planes, out_planes, stride, dropRate=0.3):
+    def __init__(self, in_planes, out_planes, stride, dropRate=0.3, norm_layer=None, activation=None):
         super(WideResNetBasicBlock, self).__init__()
-        self.bn1 = nn.BatchNorm2d(in_planes)
-        self.relu1 = nn.ReLU(inplace=True)
+        if norm_layer is None:
+            norm_layer = lambda c: nn.BatchNorm2d(c)
+        if activation is None:
+            activation = nn.ReLU(inplace=True)
+        self.bn1 = norm_layer(in_planes)
+        self.relu1 = activation
         self.conv1 = nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_planes)
-        self.relu2 = nn.ReLU(inplace=True)
+        self.bn2 = norm_layer(out_planes)
+        self.relu2 = activation
         self.conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=3, stride=1, padding=1, bias=False)
         self.droprate = dropRate
         self.equalInOut = (in_planes == out_planes)
@@ -371,14 +404,14 @@ class WideResNetBasicBlock(nn.Module):
 
 
 class WideResNetNetworkBlock(nn.Module):
-    def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.3):
+    def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.3, norm_layer=None, activation=None):
         super(WideResNetNetworkBlock, self).__init__()
-        self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate)
+        self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate, norm_layer, activation)
 
-    def _make_layer(self, block, in_planes, out_planes, nb_layers, stride, dropRate):
+    def _make_layer(self, block, in_planes, out_planes, nb_layers, stride, dropRate, norm_layer, activation):
         layers = []
         for i in range(int(nb_layers)):
-            layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate))
+            layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate, norm_layer=norm_layer, activation=activation))
         return nn.Sequential(*layers)
 
     def forward(self, x):
@@ -386,27 +419,25 @@ class WideResNetNetworkBlock(nn.Module):
 
 
 class WideResNet(nn.Module):
-    def __init__(self, depth=28, widen_factor=10, num_classes=10, dropRate=0.3):
+    def __init__(self, depth=28, widen_factor=10, num_classes=10, dropRate=0.3, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
         super(WideResNet, self).__init__()
         nChannels = [16, 16 * widen_factor, 32 * widen_factor, 64 * widen_factor]
         assert (depth - 4) % 6 == 0
         n = (depth - 4) / 6
         block = WideResNetBasicBlock
+        norm_layer = lambda c: _make_norm2d(norm_type, c, num_groups)
+        activation = _make_activation(nonlinearity)
         self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1, padding=1, bias=False)
-        self.block1 = WideResNetNetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate)
-        self.block2 = WideResNetNetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropRate)
-        self.block3 = WideResNetNetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate)
-        self.bn1 = nn.BatchNorm2d(nChannels[3])
-        self.relu = nn.ReLU(inplace=True)
+        self.block1 = WideResNetNetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate, norm_layer, activation)
+        self.block2 = WideResNetNetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropRate, norm_layer, activation)
+        self.block3 = WideResNetNetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate, norm_layer, activation)
+        self.bn1 = norm_layer(nChannels[3])
+        self.relu = activation
         self.fc = nn.Linear(nChannels[3], num_classes)
         self.nChannels = nChannels[3]
+        _init_resnet_weights(self, nonlinearity)
         for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-            elif isinstance(m, nn.Linear):
+            if isinstance(m, nn.Linear):
                 m.bias.data.zero_()
 
     def forward(self, x):
@@ -420,5 +451,5 @@ class WideResNet(nn.Module):
         return self.fc(out)
 
 
-def WideResNet2810(out_dim=10, dropRate=0.3):
-    return WideResNet(depth=28, widen_factor=10, num_classes=out_dim, dropRate=dropRate)
+def WideResNet2810(out_dim=10, dropRate=0.3, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
+    return WideResNet(depth=28, widen_factor=10, num_classes=out_dim, dropRate=dropRate, norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups)

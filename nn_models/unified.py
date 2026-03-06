@@ -58,7 +58,7 @@ class UnifiedModel(nn.Module):
         # Initialize polynomial decomposition if needed
         if model_type == 'decomp_joint_score':
             self.Pk = Pk.PerturbedFrame(K, noise_type=noise_type, polynomials=polynomials, 
-                                       shape_type=getattr(args, 'shape_type', 'gauss'))
+                                       shape_type=getattr(args, 'shape_type', 'uniform'))
             self.set_fk()
         
         # Build the appropriate architecture based on data type and backbone
@@ -246,21 +246,23 @@ class UnifiedModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_channels = hidden_channels
         self.embed_dim = embed_dim
-        self.joint = args.joint if args else False
-        self.num_time_head = getattr(args, 'num_time_head', 1)
-        self.time_act = getattr(args, 'time_act', 'leakyrelu')
+        self.num_time_head = getattr(self.args, 'num_time_head', 1)
+        self.time_act = getattr(self.args, 'time_act', 'leakyrelu')
         
-        # Time embedding
-        self.time_embed = Layers.FourierSinusoidalTimeEncoder(output_dim=embed_dim, nfreq=embed_dim)
+        # Time embedding - only initialize when needed
+        if self.args.joint:
+            self.time_embed = Layers.FourierSinusoidalTimeEncoder(output_dim=embed_dim, nfreq=embed_dim)
+        else:
+            self.time_embed = None
         
         if self.backbone == 'unet':
             # Build UNet-like architecture
-            self._build_unet_architecture(in_channels, hidden_channels, embed_dim, nonlinearity, args)
+            self._build_unet_architecture(in_channels, hidden_channels, embed_dim, nonlinearity)
         else:
             # Build ResNet/WideResNet architecture
-            self._build_resnet_architecture(in_channels, hidden_channels, dropout, args)
+            self._build_resnet_architecture(in_channels, hidden_channels, dropout)
     
-    def _build_unet_architecture(self, in_channels, hidden_channels, embed_dim, nonlinearity, args):
+    def _build_unet_architecture(self, in_channels, hidden_channels, embed_dim, nonlinearity):
         """Build UNet-like architecture."""
         # Initial input convolution (similar to the first layer in U-Net)
         self.init_conv = FusedConvBlock(in_channels, hidden_channels[0], None)
@@ -341,17 +343,25 @@ class UnifiedModel(nn.Module):
         ]
         return nn.Sequential(*layers)
     
-    def _build_resnet_architecture(self, in_channels, hidden_channels, dropout, args):
+    def _build_resnet_architecture(self, in_channels, hidden_channels, dropout):
         """Build ResNet/WideResNet architecture."""
-        # Build ResNet/WideResNet backbone
+        norm_type = getattr(self.args, "image_backbone_norm", "batchnorm")
+        nonlinearity = getattr(self.args, "nonlinearity", "leakyrelu")
+        num_groups = getattr(self.args, "image_backbone_num_groups", 8)
         if self.model_type in ["decomp_joint_score", "joint_score"]:
             out_dim = hidden_channels[-1]
         else:
             out_dim = 1
         if self.backbone == 'wideresnet28_10':
-            self.backbone_net = Layers.WideResNet2810(out_dim=out_dim, dropRate=dropout)
+            self.backbone_net = Layers.WideResNet2810(
+                out_dim=out_dim, dropRate=dropout,
+                norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups
+            )
         elif self.backbone in ['resnet18', 'resnet34', 'resnet50']:
-            self.backbone_net = getattr(Layers, f'ResNet{self.backbone.replace("resnet", "")}')(out_dim=out_dim)
+            self.backbone_net = getattr(Layers, f'ResNet{self.backbone.replace("resnet", "")}')(
+                out_dim=out_dim,
+                norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups
+            )
         else:
             raise ValueError(f"Unsupported backbone: {self.backbone}")
         
@@ -362,7 +372,7 @@ class UnifiedModel(nn.Module):
             # Input: [B, backbone_out_dim], Output: [B, K]
             # NOTE: ResNet backbone already outputs flattened [B, 512], no need for pooling
             time_head_layers = []
-            for _ in range(getattr(args, 'num_time_head', 1) - 1):
+            for _ in range(self.num_time_head - 1):
                 time_head_layers.extend([
                     nn.Linear(backbone_out_dim, backbone_out_dim),
                     nn.SiLU()
@@ -380,7 +390,7 @@ class UnifiedModel(nn.Module):
         # Data head for joint method - controlled by num_data_head and image dimensions
         if self.joint:
             # Get image dimensions from DATA_SHAPES based on args.data
-            data_shape = getattr(args, 'data', None)
+            data_shape = getattr(self.args, 'data', None)
             if data_shape in DATA_SHAPES:
                 img_channels, img_height, img_width = DATA_SHAPES[data_shape]
             else:
@@ -389,7 +399,7 @@ class UnifiedModel(nn.Module):
             
             if self.model_type == 'decomp_joint_score':
                 data_head_layers = []
-                for _ in range(getattr(args, 'num_data_head', 1) - 1):
+                for _ in range(getattr(self.args, 'num_data_head', 1) - 1):
                     data_head_layers.extend([
                         nn.Linear(backbone_out_dim, backbone_out_dim),
                         nn.SiLU()
@@ -398,7 +408,7 @@ class UnifiedModel(nn.Module):
                 self.data_head = nn.Sequential(*data_head_layers)
             else:
                 data_head_layers = []
-                for _ in range(getattr(args, 'num_data_head', 1) - 1):
+                for _ in range(getattr(self.args, 'num_data_head', 1) - 1):
                     data_head_layers.extend([
                         nn.Linear(backbone_out_dim, backbone_out_dim),
                         nn.SiLU()
@@ -622,13 +632,18 @@ class UnifiedModel(nn.Module):
     def _forward_unet_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for UNet-based time-dependent models."""
         self.nfe += 1
-        t_emb = self.time_embed(t).squeeze()
-        if cond is not None:
-            rel_temb = self.time_embed(t - cond)
-            # Apply time fusion if available
-            if hasattr(self, 'time_fusion'):
-                concat_emb = torch.cat([t_emb, rel_temb], dim=-1)
-                t_emb = self.time_fusion(concat_emb)
+        
+        # Get time embedding only if time_embed exists
+        if self.time_embed is not None:
+            t_emb = self.time_embed(t).squeeze()
+            if cond is not None:
+                rel_temb = self.time_embed(t - cond)
+                # Apply time fusion if available
+                if hasattr(self, 'time_fusion'):
+                    concat_emb = torch.cat([t_emb, rel_temb], dim=-1)
+                    t_emb = self.time_fusion(concat_emb)
+        else:
+            t_emb = None
         
         x = self.init_conv(x, t_emb)
         skips = [x]  # Store encoder features
@@ -662,14 +677,18 @@ class UnifiedModel(nn.Module):
         """Forward pass for ResNet-based time-dependent models."""
         self.nfe += 1
         
-        # Get time embedding
-        t_emb = self.time_embed(t).squeeze()
-        if cond is not None:
-            rel_temb = self.time_embed(t - cond)
-            # Apply time fusion if available
-            if hasattr(self, 'time_fusion'):
-                concat_emb = torch.cat([t_emb, rel_temb], dim=-1)
-                t_emb = self.time_fusion(concat_emb)
+        # Get time embedding only if time_embed exists
+        # For decomp models, time is handled by polynomial basis, not by network
+        if self.time_embed is not None:
+            t_emb = self.time_embed(t).squeeze()
+            if cond is not None:
+                rel_temb = self.time_embed(t - cond)
+                # Apply time fusion if available
+                if hasattr(self, 'time_fusion'):
+                    concat_emb = torch.cat([t_emb, rel_temb], dim=-1)
+                    t_emb = self.time_fusion(concat_emb)
+        else:
+            t_emb = None
         
         # Process through backbone
         # Ensure input has 3 channels

@@ -792,17 +792,17 @@ POLYNOMIALS = {
 
 # In[] Frame definition
 class PerturbedFrame(nn.Module):
-    def __init__(self, K, noise_type="imqrbf", polynomials="gaussianrbf", shape_type="uniform"):
+    def __init__(self, K, noise_type="zero", polynomials="imqrbf", shape_type="uniform"):
         super(PerturbedFrame, self).__init__()
         self.K = K  
         self.hk = POLYNOMIALS[polynomials](K, shape_type=shape_type)  
-        if noise_type == "imqrbf":
+        if noise_type in POLYNOMIALS.keys():
             self.ek = POLYNOMIALS[noise_type](K, shape_type=shape_type)
             self.theta = nn.Parameter(torch.tensor(0.0)) 
         else:
             self.ek = NoisePolynomials(K, noise_type=noise_type)
             self.theta = None
-
+            
     @property
     def integrals(self):
         return self.weight_sum(self.hk.integrals, self.ek.integrals)   # Shape [1, K]

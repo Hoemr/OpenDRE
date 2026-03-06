@@ -67,10 +67,12 @@ OOD_IMGLIST_BENCHMARKS = {
         },
         # ===== OOD TRAINING DATA (for training_step) =====
         # This is qx in the (px, qx) training pairs
-        # Use "random" to use 300K random images (no data leakage with eval OOD)
-        # Previously used "cifar10/val_tin.txt" which caused data leakage
+        # - "selfgen": q from ID only via patch_shuffle / phase_rand / cutpaste_cutmix (no extra data)
+        # - "random": use 300K random images (no data leakage with eval OOD)
+        # - path to txt: use imglist dataset (e.g. val_tin.txt)
         "ood_train": "random",
         "ood_train_random_file": "300K_random_images.npy",  # Used when ood_train="random"
+        "selfgen_grid": 4,  # Grid size for patch_shuffle when ood_train="selfgen"
         # ===== OOD EVALUATION DATA (for validation_step/test_step) =====
         # Used to compute AUROC, FPR95, etc. in _evaluate_ood()
         # Ordered by: near-OOD first, then far-OOD
@@ -94,6 +96,7 @@ OOD_IMGLIST_BENCHMARKS = {
         },
         "ood_train": "random",
         "ood_train_random_file": "300K_random_images.npy",
+        "selfgen_grid": 4,
         "ood_eval": [
             ("cifar10", "cifar100/test_cifar10.txt"),
             ("tin", "cifar100/test_tin.txt"),
@@ -112,6 +115,91 @@ OOD_IMGLIST_NEAR_FAR = {
 }
 
 OOD_IMGLIST_IN_DIST_CHOICES = list(OOD_IMGLIST_BENCHMARKS.keys())
+
+
+# ---------------------------------------------------------------------------
+# Self-generated OOD transforms (semantic-destroying, low-level-statistics-preserving)
+# All operate on tensors (C, H, W); normalized space unless noted.
+# ---------------------------------------------------------------------------
+
+def _patch_shuffle(x, grid=4):
+    """Grid shuffle: split image into grid x grid patches and shuffle patch order.
+    x: (C, H, W) tensor."""
+    C, H, W = x.shape
+    gh, gw = min(grid, H), min(grid, W)
+    ph, pw = H // gh, W // gw
+    if ph < 1 or pw < 1:
+        return x
+    # (C, gh, ph, gw, pw) -> (C, gh*gw, ph, pw)
+    patches = x.view(C, gh, ph, gw, pw).permute(0, 1, 3, 2, 4).reshape(C, gh * gw, ph, pw)
+    idx = torch.randperm(gh * gw, device=x.device, dtype=torch.long)
+    patches = patches[:, idx]
+    return patches.view(C, gh, gw, ph, pw).permute(0, 1, 3, 2, 4).reshape(C, H, W)
+
+
+def _phase_rand(x, mean, std):
+    """Preserve amplitude spectrum, randomize phase in FFT. Done in [0,1] space: denorm -> fft -> renorm.
+    x: (C, H, W) normalized; mean, std: (C,) or (C,1,1) or list/tuple."""
+    if isinstance(mean, (list, tuple)):
+        mean = torch.tensor(mean, dtype=x.dtype, device=x.device).view(-1, 1, 1)
+    else:
+        mean = mean.to(x.device).to(x.dtype)
+        if mean.dim() == 1:
+            mean = mean.view(-1, 1, 1)
+    if isinstance(std, (list, tuple)):
+        std = torch.tensor(std, dtype=x.dtype, device=x.device).view(-1, 1, 1)
+    else:
+        std = std.to(x.device).to(x.dtype)
+        if std.dim() == 1:
+            std = std.view(-1, 1, 1)
+    # Denorm to [0, 1]
+    x01 = (x * std + mean).clamp(0.0, 1.0)
+    C, H, W = x01.shape
+    out = x01.new_empty(x01.shape)
+    for c in range(C):
+        f = torch.fft.fft2(x01[c])
+        amp = f.abs()
+        phase = torch.angle(f)
+        new_phase = (torch.rand_like(phase, device=x.device) * 2.0 * np.pi - np.pi)
+        f_new = amp * torch.exp(1j * new_phase)
+        rec = torch.fft.ifft2(f_new).real.clamp(0.0, 1.0)
+        out[c] = rec
+    # Renorm
+    return (out - mean) / std
+
+
+def _cutpaste_cutmix(x_in, x2):
+    """Cutpaste or cutmix from another ID image: random box, paste (cutpaste) or blend (cutmix).
+    x_in, x2: (C, H, W). Returns (C, H, W)."""
+    C, H, W = x_in.shape
+    w_max = max(1, W // 2)
+    h_max = max(1, H // 2)
+    w = random.randint(1, w_max)
+    h = random.randint(1, h_max)
+    top = random.randint(0, H - h) if H > h else 0
+    left = random.randint(0, W - w) if W > w else 0
+    out = x_in.clone()
+    if random.random() < 0.5:
+        # Cutpaste: paste patch from x2
+        out[..., top : top + h, left : left + w] = x2[..., top : top + h, left : left + w]
+    else:
+        # Cutmix: blend in box
+        lam = random.random()
+        out[..., top : top + h, left : left + w] = (
+            lam * x_in[..., top : top + h, left : left + w]
+            + (1.0 - lam) * x2[..., top : top + h, left : left + w]
+        )
+    return out
+
+
+def _selfgen_ood_transform(x_in, x2, norm_mean, norm_std, grid=4):
+    """Choose one of patch_shuffle, phase_rand, cutpaste_cutmix at random; return x_ood."""
+    choice = random.randint(0, 2)
+    if choice == 0:
+        return _patch_shuffle(x_in, grid=grid)
+    if choice == 1:
+        return _phase_rand(x_in, norm_mean, norm_std)
+    return _cutpaste_cutmix(x_in, x2)
 
 
 def get_ood_imglist_transforms(split, normalization_type="cifar10", image_size=32, pre_size=None):
@@ -180,14 +268,23 @@ class OODDetectionDataset(Dataset):
     - qx: OOD image (out-of-distribution)
     - true_fdiv: placeholder value (always 0.0)
     
-    IMPORTANT: 
-    - OOD image (qx) is randomly sampled for each ID image (px)
-    - This means the same ID image will be paired with different OOD images across epochs
+    Modes:
+    - q_mode != "selfgen": OOD image (qx) is from ood_dataset (random index each time).
+    - q_mode == "selfgen": q is produced from ID images via semantic-destroying transforms
+      (patch_shuffle, phase_rand, cutpaste/cutmix); no external OOD data. Requires
+      norm_mean, norm_std for phase_rand (denorm/renorm in [0,1]).
     """
     
-    def __init__(self, in_dist_dataset, ood_dataset):
+    def __init__(self, in_dist_dataset, ood_dataset=None, q_mode="external", norm_mean=None, norm_std=None, selfgen_grid=4):
         self.in_dist_dataset = in_dist_dataset  # ID dataset (px)
-        self.ood_dataset = ood_dataset          # OOD dataset (qx)
+        self.ood_dataset = ood_dataset          # OOD dataset (qx); None when q_mode="selfgen"
+        self.q_mode = (q_mode.lower() if isinstance(q_mode, str) else q_mode)
+        if self.q_mode == "selfgen":
+            if norm_mean is None or norm_std is None:
+                raise ValueError("OODDetectionDataset(q_mode='selfgen') requires norm_mean and norm_std.")
+            self._norm_mean = torch.tensor(norm_mean, dtype=torch.float32).view(-1, 1, 1)
+            self._norm_std = torch.tensor(norm_std, dtype=torch.float32).view(-1, 1, 1)
+            self._selfgen_grid = selfgen_grid
         self.num_samples = len(in_dist_dataset)
 
     def __len__(self):
@@ -196,7 +293,23 @@ class OODDetectionDataset(Dataset):
     def __getitem__(self, idx):
         # Get ID image (px) at fixed index
         x_in, _ = self.in_dist_dataset[idx]
-        # Get OOD image (qx) at RANDOM index (different each time!)
+        if self.q_mode == "selfgen":
+            # x_ood = T(x_in, x2) with T in {patch_shuffle, phase_rand, cutpaste_cutmix}
+            random_idx = random.randint(0, len(self.in_dist_dataset) - 1)
+            x2, _ = self.in_dist_dataset[random_idx]
+            # Ensure tensors for in-place / device (e.g. phase_rand uses x_in.device)
+            if not isinstance(x_in, torch.Tensor):
+                x_in = torch.from_numpy(np.array(x_in)).float()
+            if not isinstance(x2, torch.Tensor):
+                x2 = torch.from_numpy(np.array(x2)).float()
+            x_ood = _selfgen_ood_transform(
+                x_in, x2,
+                norm_mean=self._norm_mean,
+                norm_std=self._norm_std,
+                grid=self._selfgen_grid,
+            )
+            return x_in, x_ood, torch.tensor(0.0)
+        # External OOD: get qx from ood_dataset at random index
         ood_idx = random.randint(0, len(self.ood_dataset) - 1)
         x_ood, _ = self.ood_dataset[ood_idx]
         return x_in, x_ood, torch.tensor(0.0)
@@ -600,11 +713,22 @@ class OutOfDistributionDetectionDataModule(DataModule):
 
         # ===== STEP 2: Load OOD training data (for training_step) =====
         # This is qx in the training pairs (px, qx)
-        # Supports two modes:
+        # Supports three modes:
+        #   - "selfgen": q from ID via transforms (patch_shuffle, phase_rand, cutpaste/cutmix); no extra data
         #   - "random": use 300K random images (no data leakage)
         #   - path to txt file: use imglist dataset
-        ood_train_config = b.get("ood_train", "")
-        if ood_train_config == "random":
+        ood_train_config = getattr(self.args, "ood_train", None) or b.get("ood_train", "")
+        if ood_train_config == "selfgen":
+            # Self-generated OOD: q = T(x_in, x2) from ID only
+            self.train_dataset = OODDetectionDataset(
+                id_train,
+                ood_dataset=None,
+                q_mode="selfgen",
+                norm_mean=norm_mean,
+                norm_std=norm_std,
+                selfgen_grid=b.get("selfgen_grid", 4),
+            )
+        elif ood_train_config == "random":
             # Use random images dataset (no data leakage with eval OOD)
             # Uses memmap + direct tensor ops for fast loading without PIL
             random_file = b.get("ood_train_random_file", "300K_random_images.npy")
@@ -617,6 +741,7 @@ class OutOfDistributionDetectionDataModule(DataModule):
             ood_for_train = OODRandomImagesDataset(
                 random_path, image_size=image_size, mean=norm_mean, std=norm_std
             )
+            self.train_dataset = OODDetectionDataset(id_train, ood_for_train)
         else:
             # Legacy: use imglist file
             ood_train_path = _join_data_dir(self.args.data_dir, list_subdir, ood_train_config)
@@ -626,11 +751,7 @@ class OutOfDistributionDetectionDataModule(DataModule):
                 imglist_pth=ood_train_path, data_dir=image_root, num_classes=num_classes, transform=transform_test
             )
             ood_for_train = ImglistDatasetAsTuple(ood_train_ds)
-
-        # ===== STEP 3: Create training dataset =====
-        # self.train_dataset.__getitem__(idx) returns (px, qx, 0.0)
-        # where px is ID image, qx is OOD image
-        self.train_dataset = OODDetectionDataset(id_train, ood_for_train)
+            self.train_dataset = OODDetectionDataset(id_train, ood_for_train)
         
         self.val_dataset = DummyDataset(input_shape=(3, image_size, image_size))
         self.test_dataset = DummyDataset(input_shape=(3, image_size, image_size))
