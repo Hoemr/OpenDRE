@@ -191,12 +191,8 @@ class DensityEstimationModel(pl.LightningModule):
 class DensityRatioEstimationModel(pl.LightningModule):
     def __init__(self, args, save_path, datamodule):
         super().__init__()
-        
-        # CRITICAL: Use ignore=["datamodule"] to prevent pickling the entire datamodule
-        # (which contains datasets, memmaps, imglists - all heavy unpicklable objects)
-        # This avoids the 30+ minute hang during hyperparameter serialization.
-        # datamodule is still accessible via self.datamodule at runtime.
         self.save_hyperparameters(ignore=["datamodule"])
+        self.datamodule = datamodule
         
         self.args = args
         self.task = args.task
@@ -210,9 +206,6 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.eps = args.eps
         self.set_basic_functions(args)
         self.set_prepare_batch()
-        
-        # Store datamodule for runtime use (NOT in hparams, won't be pickled)
-        self.datamodule = datamodule
 
         self.fdiv_path = os.path.join(save_path, "fdiv")
         self.checkpoint_dir = os.path.join(save_path, "checkpoints")

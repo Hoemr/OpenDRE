@@ -53,9 +53,7 @@ def get_common_args(parser):
     parser.add_argument("--joint", type=eval, default=True, choices=[True, False])   
     parser.add_argument("--condition", type=eval, default=False, choices=[True, False]) 
     parser.add_argument('--path_type', type=str, default="VP", help="interpolant type")  
-    parser.add_argument('--relative_ratio', type=float, default=0.2, help="relative ratio for relative ratio sampling")
-    parser.add_argument('--init_weight', type=float, default=1e-2)  # init
-    parser.add_argument('--final_weight', type=float, default=1e-2)  # final
+    parser.add_argument('--relative_ratio', type=float, default=0.8, help="relative ratio for relative ratio sampling")
     parser.add_argument('--scale', type=float, default=1., help="scale of loss terms")
     
     # solver parameters

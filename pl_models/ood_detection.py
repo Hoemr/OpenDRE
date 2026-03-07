@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from path import ImageInterpXt
 from pl_data import OOD_EVAL_CONFIG, OOD_IMGLIST_NEAR_FAR
 from .base import DensityRatioEstimationModel
+import visualization.visualization as vis_utils
 
 _TRAIN_LOGGER_NAME = "training_logger"
 
@@ -84,6 +85,15 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
 
     def on_validation_epoch_end(self):
         self._evaluate_ood(stage="val")
+        vis_utils.visualize_path_function(
+            self.path, sample_path=self.sample_path,
+            path_type=self.args.path_type,
+            constraint_type=self.args.constraint_type
+        )
+        vis_utils.visualize_variance_profiles(
+            self.path, sample_path=self.sample_path,
+            path_type=self.args.path_type
+        )
 
     def test_step(self, batch, batch_idx):
         return {}

@@ -661,10 +661,8 @@ def visualize_path_function(path_model, sample_path="./", path_type="mvp", const
         
         # mvp
         if path_type == "mvp":
-            # alpha_prior = prior_traj[name].detach().cpu()
             alpha_post = post_traj[name].detach().cpu()
-            # plt.plot(t_grid.cpu(), alpha_prior.view(t_grid.shape), 'b-', lw=2.5, label='MinPV (prior, ours)')
-            plt.plot(t_grid.cpu(), alpha_post.view(t_grid.shape), 'r-', lw=2.5, label='MinPV (ours)')
+            plt.plot(t_grid.cpu(), alpha_post.view(t_grid.shape), 'r-', lw=2.5, label='MVP (Ours)')
         
         ylabel = {"alpha": '$\\alpha(t)$', "beta": '$\\beta(t)$', "gamma": '$\\gamma(t)$'}[name]
         plt.title(f'Path Function Comparison ({ylabel})', fontsize=16)
@@ -713,7 +711,7 @@ def visualize_variance_profiles(path_model, sample_path="./", path_type="VP"):
         dot_alpha = post_traj["dot_alpha"]
         dot_beta = post_traj["dot_beta"]
         variance = path_model.score_var_fn(t_grid, alpha_t=alpha, beta_t=beta, d_alpha_dt=dot_alpha, d_beta_dt=dot_beta)[0]
-        ax.plot(t_grid.detach().cpu(), variance.view(t_grid.shape).detach().cpu().log(), 'r-', lw=2.5, label="MinPV (ours)")
+        ax.plot(t_grid.detach().cpu(), variance.view(t_grid.shape).detach().cpu().log(), 'r-', lw=2.5, label="MVP (Ours)")
 
     # --- Plot Customization ---
     # ax.set_yscale('log')
@@ -796,7 +794,7 @@ def visualize_integrated_variance_profiles(path_model, sample_path="./", path_ty
         log_integrated_variance = torch.log(integrated_variance + 1e-12)
 
         ax.plot(t_tensor.numpy()[cutoff:-cutoff], log_integrated_variance.numpy()[cutoff:-cutoff], 
-                'r-', lw=2.5, label="MinPV (ours)")
+                'r-', lw=2.5, label="MVP (Ours)")
 
     # --- Plot Customization ---
     ax.set_xlabel('Time $t$', fontsize=14)

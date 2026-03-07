@@ -101,8 +101,6 @@ class ScoreMatchingTrainStepFn(nn.Module):
         self.batch_num = args.batch_num
         self.epochs = args.epochs
         self.total_step = self.epochs * self.batch_num
-        self.initial_weight = args.init_weight
-        self.final_weight = args.final_weight
         
         self.SAI = args.SAI
         self.mvp = args.mvp
@@ -276,39 +274,6 @@ class ScoreMatchingTrainStepFn(nn.Module):
         total_loss = torch.sum(weights * torch.stack(mean_losses, dim=0))
         return total_loss
     
-    def get_current_weight(self, step, total_epochs=None, initial_weight=None, final_weight=None, strategy="cosine"):
-        if total_epochs is None:
-            total_epochs = self.epochs
-        if initial_weight is None:
-            initial_weight = self.initial_weight
-        if final_weight is None:
-            final_weight = self.final_weight
-        epoch = step // self.batch_num
-
-        if strategy == "linear":
-            """Linear adjustment strategy. Adjust the power to accelerate the linear decreasing speed. Here, the power is set to 2, which can be adjusted as needed."""
-            power = 1
-            current_weight = initial_weight - (initial_weight - final_weight) * (torch.tensor(epoch / total_epochs).pow(power))
-        elif strategy == "exponential":
-            """Exponential adjustment strategy. Dynamically adjust the decay rate according to the number of iterations. The coefficient 0.001 here can be adjusted according to the actual situation."""
-            decay_rate = (epoch / total_epochs)  # 0.001 * 
-            current_weight = initial_weight * torch.exp(-torch.tensor(decay_rate))
-            current_weight = max(current_weight, final_weight).item()
-        elif strategy == "step":
-            """Step adjustment strategy. Reasonably set the step interval and the weight value decreased each time according to the number of iterations."""
-            step_size = 1000  # int(math.sqrt(total_epochs))
-            step_weight = (initial_weight - final_weight) / (total_epochs // step_size)
-            current_weight = initial_weight - (epoch // step_size) * step_weight
-            current_weight = max(current_weight, final_weight)
-        elif strategy == "cosine":
-            """Cosine annealing adjustment strategy. Adjust the period according to the number of iterations. The coefficient 2 here can be adjusted according to the actual situation."""
-            T = total_epochs 
-            current_weight = final_weight + 0.5 * (initial_weight - final_weight) * (1 + torch.cos(torch.tensor(math.pi * 0.5 * epoch / T))).item()
-        else:
-            raise ValueError("The weight adjustment strategy is not supported. Please choose 'linear', 'exponential','step' or 'cosine' strategy.")
-
-        return current_weight
-    
     def _compute_coefficients_and_sample(self, x0, x1, t, with_grad=False):
         """evaluate coefficients and sample xt"""
         alpha_t, beta_t, d_alpha_dt, d_beta_dt = self.path.get_coefficients_and_derivatives(t)
@@ -333,7 +298,9 @@ class ScoreMatchingTrainStepFn(nn.Module):
         elbo = self.path.bayesian_path.elbo(x0, x1, t, variance=variance, score_reg=score_reg)
         
         weight = 1. / time_score_var.mean()
-        return self.adaptive_loss_weighting([loss * weight, -elbo * weight])
+        return loss - elbo
+        # return weight * (loss - elbo)
+        # return self.adaptive_loss_weighting([loss * weight, -elbo * weight])
     
     def time_score_matching(self, score_model, x0, x1, t0, t1, t, l=None, decomp=False, batch_size=None, dim=1):    
         alpha_t, beta_t, d_alpha_dt, d_beta_dt, xt, t = self._compute_coefficients_and_sample(x0, x1, t, with_grad=True)
@@ -350,9 +317,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         
         xt_score_dt = self._compute_time_gradient(score_model, score_t, t, xt, fk_xt)
         
-        ####################
-        # Boundary condition
-        ####################
+        ##Boundary condition
         boundary_0 = (score_model(t0, x0)).squeeze() * lambda_t0
         fk_x0 = score_model.get_fk_reg() if hasattr(score_model, 'get_fk_reg') else None
 
@@ -362,9 +327,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         boundary_loss_terms = {"boundary_0": boundary_0, "boundary_1": boundary_1, 
                                "fk_x0": fk_x0, "fk_x1": fk_x1}
         
-        ####################
-        # Score-matching loss
-        ####################
+        ##Score-matching loss
         term1 = xt_score_dt * lambda_t
         term2 = score_t * lambda_dt
         term3 = 0.5 * score_t ** 2 * lambda_t
@@ -395,9 +358,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         
         xt_score_dt = self._compute_time_gradient(score_model, score_t, t, xt, fk_xt)
 
-        ####################
-        # Boundary condition
-        ####################
+        ##Boundary condition
         boundary_0 = (score_model(t0, x0)[-1]) * lambda_t0
         fk_x0 = score_model.get_fk_reg() if hasattr(score_model, 'get_fk_reg') else None
             
@@ -407,9 +368,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         boundary_loss_terms = {"boundary_0": boundary_0, "boundary_1": boundary_1, 
                                "fk_x0": fk_x0, "fk_x1": fk_x1}
         
-        ####################
-        # Score-matching loss
-        ####################
+        ##Score-matching loss
         term3 = xt_score_dt * lambda_t_time
         term4 = score_t * lambda_dt
         time_loss = boundary_0 - boundary_1 + term3 + term4
@@ -445,16 +404,12 @@ class ScoreMatchingTrainStepFn(nn.Module):
         assert score_t.ndim <= 2, "score_t should be at most 2D"
         score_t = score_t[(...,) + (None,) * (x0.ndim - score_t.ndim)]
         
-        ####################
-        # Time score-matching loss
-        ####################
+        ##Time score-matching loss
         time_diff = marginal_std * (score_t - target_cond_time_score)
         time_loss = lambda_t_time * time_diff**2 / (marginal_var + 1e-5)
         loss = time_loss
         
-        ####################
-        # KMM (mvp, Minimum Variance Path)
-        ####################
+        ## KMM (mvp, Minimum Variance Path)
         if self.mvp:
             loss = self._apply_kmm_regularization(loss, score_t, x0, x1, time_score_var, batch_size)
 
@@ -481,9 +436,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         assert score_t.ndim <= 2, "score_t should be at most 2D"
         score_t = score_t[(...,) + (None,) * (x0.ndim - score_t.ndim)]
         
-        ####################
         # Score-matching loss
-        ####################
         time_diff = marginal_std * (score_t - target_cond_time_score)
         time_loss = lambda_t_time * time_diff**2 / (marginal_var + 1e-5)
         
@@ -493,9 +446,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         
         loss = time_loss + ssm_loss
         
-        ####################
-        # KMM (mvp, Minimum Variance Path)
-        ####################
+        ## KMM (mvp, Minimum Variance Path)
         if self.mvp:
             loss = self._apply_kmm_regularization(loss, score_t, x0, x1, time_score_var, batch_size)
             
@@ -529,7 +480,6 @@ class ScoreMatchingTrainStepFn(nn.Module):
         nll = torch.zeros_like(t)
         if decomp:
             reg_loss = 0.
-            # base_weight = self.get_current_weight(step)
             base_weight = 1. / self.K 
  
             # fk_x0 = all_loss_terms["boundary_loss_terms"]["fk_x0"]
@@ -563,41 +513,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
             # # # loss = loss + reg_loss #/ self.K 
             
             # loss = loss + reg_loss
-            
 
-            # if step % 1 == 0:
-            #     def get_avg_and_format(loss):
-            #         avg = loss.mean().detach().item()
-            #         return "{:.4f}".format(avg)
-            #     print("======================================")
-            #     loss_avg = get_avg_and_format(loss)
-            #     ssm_term1_avg = get_avg_and_format(ssm_term1)
-            #     ssm_term2_avg = "{:.4f}".format(ssm_term2.mean().detach().item())
-            #     term1_avg = "{:.4f}".format(term1.mean().detach().item())
-            #     term2_avg = "{:.4f}".format(term2.mean().detach().item())
-            #     term3_avg = "{:.4f}".format(term3.mean().detach().item())
-            #     term4_avg = "{:.4f}".format(term4.mean().detach().item())
-            #     l12_loss_avg = "{:.4f}".format(l12_loss.mean().detach().item())
-            #     # bregman_avg = "{:.4f}".format(bregman.mean().detach().item())
-            #     # # mine_loss_avg = "{:.4f}".format(mine_loss.mean().detach().item())
-                
-            #     score_x_norm = 0.5 * (torch.sum(score_x.view((batch_size,-1)) * score_x.view((batch_size,-1)), dim=-1)).view((batch_size,-1))
-            #     score_t_norm = 0.5 * (torch.sum(score_t * score_t, dim=-1)).view((batch_size,-1))
-            #     score_x_norm_avg = get_avg_and_format(score_x_norm)
-            #     score_t_norm_avg = get_avg_and_format(score_t_norm)
-            #     clip_loss_avg = "{:.4f}".format(clip_loss.mean().detach().item())
-            #     logr0 = get_avg_and_format(logr0)
-            #     logr1 = get_avg_and_format(logr1)
-            #     # print(f"score_x: {score_x_norm_avg}, score_t: {score_t_norm_avg}, breg: {bregman_avg}, clip: {clip_loss_avg}, l12_loss={l12_loss_avg}, logr0: {logr0}, logr1: {logr1}")
-
-            #     elbo_avg = get_avg_and_format(elbo)
-            #     print(f"score_x: {score_x_norm_avg}, score_t: {score_t_norm_avg}, logr0: {logr0}, logr1: {logr1}, elbo: {elbo_avg}")
-                
-            #     # print("MINE loss: ", mine_loss_avg, joint_expectation, marginal_expectation)
-            #     # print(bregman.detach().mean().cpu().item())
-            #     # Breg={bregman.detach().mean().cpu().item()}, 
-            #     print(f"Step {step}: loss={loss_avg}, ssm_term1={ssm_term1_avg}, ssm_term2={ssm_term2_avg}, term1={term1_avg}, term2={term2_avg}, term3={term3_avg}, term4={term4_avg}")
-                
             score_model.set_fk()
             score_model.Pk.set_cached_sigma()
             return {'loss': loss.mean(), 'nll': nll.mean()}
