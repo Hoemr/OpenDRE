@@ -12,7 +12,7 @@ from estimators import SOLVER_DICT, QUAD_DICT, SOLVER_DICT_SCIPY
 SOLVERS = [*SOLVER_DICT_SCIPY.keys(), *SOLVER_DICT.keys(), *QUAD_DICT.keys()]
 SUB_METHODS = ["score", "neural", "kernel"]
 SUBSUB_METHODS = {"score": ["dre_infty", "d3re", "osdre", "isadre"], 
-                  "neural": ["kulsif", "logistic", "nce", "infonce", "rkl", "hellinger", "kl", "gamma", "ew", "pw"], 
+                  "neural": ["kulsif", "logistic", "nce", "infonce", "rkl", "hellinger", "kl", "gamma", "ew", "pw", "chisq"], 
                   "kernel": []}
 
 def get_common_args(parser):
@@ -53,6 +53,7 @@ def get_common_args(parser):
     parser.add_argument("--joint", type=eval, default=True, choices=[True, False])   
     parser.add_argument("--condition", type=eval, default=False, choices=[True, False]) 
     parser.add_argument('--path_type', type=str, default="VP", help="interpolant type")  
+    parser.add_argument('--relative_ratio', type=float, default=0.2, help="relative ratio for relative ratio sampling")
     parser.add_argument('--init_weight', type=float, default=1e-2)  # init
     parser.add_argument('--final_weight', type=float, default=1e-2)  # final
     parser.add_argument('--scale', type=float, default=1., help="scale of loss terms")
@@ -229,16 +230,27 @@ def parse_args():
     # Energy modeling
     args.joint = False if args.energy else args.joint
 
+    ds_dict = {
+               # 2D Toy Datasets
+               'swissroll': 2, '8gaussians': 2, 'pinwheel': 2, 'circles': 2, 
+               'moons': 2, '2spirals': 2, 'checkerboard': 2, 'rings': 2, 
+               # Tabular Datasets
+               'bsds300': 63, 'power': 6, 'gas': 8, 'hepmass': 21, 'miniboone': 43,
+               # Image Datasets
+               'mnist': 784, 'fashion_mnist': 784, 'cifar10': 3072, 'cifar100': 3072,
+               'svhn': 3072, 'lsun': 3072, 'celeba': 3072, 'imagenet': 3072,
+               # Change Point Detection Datasets
+               'cpd_text': 20, 'cpd_creditcard': 4,
+               # Mutual Information Datasets
+               'diag_multi_gauss': 2, 'half_cube_map': 2,
+    }
+
     # --condition True --t_mode IS
     if args.task == "likelihood_estimation":
         if args.subtask == "tabular":
             # python main.py likelihood_estimation --subtask tabular --data bsds300 --method dre --decomp --K_decomp 400 --batch_size 20000 --nhidden 5 --hdim_factor 1 --gpu_id 1
-            ds_dict = {'swissroll': 2, '8gaussians': 2, 'pinwheel': 2, 'circles': 2, 
-               'moons': 2, '2spirals': 2, 'checkerboard': 2, 'rings': 2, 
-               'bsds300': 63, 'power': 6, 'gas': 8, 'hepmass': 21, 'miniboone': 43}
             args.d = ds_dict[args.data]
             
-            # args.path_type = "linear"
             args.grad_clip = 5.
             if args.decomp:
                 args.hdim_factor = 2
@@ -258,17 +270,12 @@ def parse_args():
         elif args.subtask == "real_image":
             # python main.py likelihood_estimation --subtask real_image --data mnist --method dre --decomp --K_decomp 1000 --gpu_id 0
             args = set_image_args(args)
-            if isinstance(args.gpu_id, list):
-                num_gpus = len(args.gpu_id)
-            else:
-                num_gpus = 1
-            args.early_stopping = 60 * num_gpus
+            args.early_stopping = 60 
+            args.d = ds_dict[args.data]
     
     elif args.task == "fdiv_estimation":
         args.num_data_head = 3
         args.num_time_head = 3
-        
-        ds_dict = {'cpd_text': 20, 'cpd_creditcard': 4}
         args.d = ds_dict.get(args.data, args.d)
         
         if args.d < 100:
@@ -295,7 +302,6 @@ def parse_args():
             args.reload_interval = args.eval_freq * 5
             args.num_data_head = 1
             args.num_time_head = 1
-            # args.batch_size = 500
             args.eval_freq = 100
         
         elif args.subtask == "mutual_information":
@@ -330,13 +336,7 @@ def parse_args():
             # Set OOD detection specific args
             args = set_image_args(args)
             args.data = args.ood_in_dist
-            # if args.sample_noise_std == 1e-5:
-            #     # Keep OOD default behavior while unifying parameter name.
-            #     args.sample_noise_std = 0.1
-            # args.dims = "128-256-512"  # Same as real_image for CNN
-            # args.epochs = 500
-            # args.batch_size = 512
-            # args.eval_freq = 10
+            args.d = ds_dict.get(args.data, ds_dict["mnist"])
             args.reload_interval = args.epochs
     
     return args
@@ -357,7 +357,7 @@ def get_save_path(args):
             key_args.extend(["rho"+str(args.rho)])
         
         elif args.subtask == "ood_detection":
-            key_args.extend([args.ood_in_dist, args.ood_base_type, f"noise{args.sample_noise_std}",])
+            key_args.extend([args.ood_in_dist, args.image_backbone, f"noise{args.sample_noise_std}",])
             if getattr(args, "ood_use_imglist", False):
                 key_args.append("imglist")
   

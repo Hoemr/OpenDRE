@@ -523,7 +523,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         t1 = torch.ones_like(t) - eps
         
         all_loss_terms = self.loss_fn(score_model, x0, x1, t0, t1, t, l=l, decomp=decomp, batch_size=batch_size, dim=dim)
-        loss = all_loss_terms["loss"].view((batch_size, 1))
+        loss = all_loss_terms["loss"]
         self.step += 1
         
         nll = torch.zeros_like(t)
@@ -534,35 +534,35 @@ class ScoreMatchingTrainStepFn(nn.Module):
  
             # fk_x0 = all_loss_terms["boundary_loss_terms"]["fk_x0"]
             # fk_x1 = all_loss_terms["boundary_loss_terms"]["fk_x1"]
-            fk_xt = all_loss_terms["fk_xt"]
+            # fk_xt = all_loss_terms["fk_xt"]
 
-            if self.auxiliary_loss:
-                # bregman divergence
-                # logr0 = score_model.compute_weighted_sum(x0, f_k=fk_x0)
-                # logr1 = score_model.compute_weighted_sum(x1, f_k=fk_x1)
-                logr0 = score_model.compute_weighted_sum(x0)
-                logr1 = score_model.compute_weighted_sum(x1)
-                bregman = self.bregman_div_loss(logr0, logr1, bregman_type=self.bregman_type)
-                reg_loss += bregman
+            # if self.auxiliary_loss:
+            #     # bregman divergence
+            #     # logr0 = score_model.compute_weighted_sum(x0, f_k=fk_x0)
+            #     # logr1 = score_model.compute_weighted_sum(x1, f_k=fk_x1)
+            #     logr0 = score_model.compute_weighted_sum(x0)
+            #     logr1 = score_model.compute_weighted_sum(x1)
+            #     bregman = self.bregman_div_loss(logr0, logr1, bregman_type=self.bregman_type)
+            #     reg_loss += bregman
                 
-                # if self.task == "likelihood_estimation":
-                #     nll = - (logr1.view((batch_size, 1)) + self.path.prior_logp(x1).view((batch_size, 1))).mean()
-                #     # nll = - score_model.likelihood_estimation(x1, f_k=fk_x1).view((batch_size, 1))
+            #     # if self.task == "likelihood_estimation":
+            #     #     nll = - (logr1.view((batch_size, 1)) + self.path.prior_logp(x1).view((batch_size, 1))).mean()
+            #     #     # nll = - score_model.likelihood_estimation(x1, f_k=fk_x1).view((batch_size, 1))
                     
-                #     # bpd = nll / (np.log(2) * np.prod(x1.shape[1:]))  # bpd
-                #     reg_loss += (nll - log_det_J.mean()) / torch.tensor((np.log(2) * np.prod(x1.shape[1:]))).to(x1)
+            #     #     # bpd = nll / (np.log(2) * np.prod(x1.shape[1:]))  # bpd
+            #     #     reg_loss += (nll - log_det_J.mean()) / torch.tensor((np.log(2) * np.prod(x1.shape[1:]))).to(x1)
 
-            #     elif self.task == "fdiv_estimation":
-            #         pass     
-            #         # MINE loss
-            #         # joint_expectation = logr1.mean(dim=0)   
-            #         # marginal_expectation = torch.log(torch.mean(torch.exp(logr0), dim=0))         
-            #         # mine_loss = - (joint_expectation - marginal_expectation)
-            #         # loss += weight * mine_loss 
+            # #     elif self.task == "fdiv_estimation":
+            # #         pass     
+            # #         # MINE loss
+            # #         # joint_expectation = logr1.mean(dim=0)   
+            # #         # marginal_expectation = torch.log(torch.mean(torch.exp(logr0), dim=0))         
+            # #         # mine_loss = - (joint_expectation - marginal_expectation)
+            # #         # loss += weight * mine_loss 
             
-            # # loss = loss + reg_loss #/ self.K 
+            # # # loss = loss + reg_loss #/ self.K 
             
-            loss = loss + reg_loss
+            # loss = loss + reg_loss
             
 
             # if step % 1 == 0:

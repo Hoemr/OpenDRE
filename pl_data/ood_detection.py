@@ -192,15 +192,23 @@ def _cutpaste_cutmix(x_in, x2):
     return out
 
 
-def _selfgen_ood_transform(x_in, x2, norm_mean, norm_std, grid=4):
-    """Choose one of patch_shuffle, phase_rand, cutpaste_cutmix at random; return x_ood."""
-    choice = random.randint(0, 2)
-    if choice == 0:
-        return _patch_shuffle(x_in, grid=grid)
-    if choice == 1:
-        return _phase_rand(x_in, norm_mean, norm_std)
-    return _cutpaste_cutmix(x_in, x2)
+# def _selfgen_ood_transform(x_in, x2, norm_mean, norm_std, grid=4):
+#     """Choose one of patch_shuffle, phase_rand, cutpaste_cutmix at random; return x_ood."""
+#     choice = random.randint(0, 2)
+#     if choice == 0:
+#         return _patch_shuffle(x_in, grid=grid)
+#     if choice == 1:
+#         return _phase_rand(x_in, norm_mean, norm_std)
+#     return _cutpaste_cutmix(x_in, x2)
 
+def _selfgen_ood_transform(x_in, x2, norm_mean, norm_std, grid=4):
+    r = random.random()
+    if r < 0.60:
+        return _cutpaste_cutmix(x_in, x2)   # cross-class x2
+    elif r < 0.85:
+        return _patch_shuffle(x_in, grid=grid)
+    else:
+        return _phase_rand(x_in, norm_mean, norm_std)
 
 def get_ood_imglist_transforms(split, normalization_type="cifar10", image_size=32, pre_size=None):
     mean, std = OOD_IMGLIST_NORMALIZATION.get(normalization_type, OOD_IMGLIST_NORMALIZATION["cifar10"])
@@ -279,39 +287,52 @@ class OODDetectionDataset(Dataset):
         self.in_dist_dataset = in_dist_dataset  # ID dataset (px)
         self.ood_dataset = ood_dataset          # OOD dataset (qx); None when q_mode="selfgen"
         self.q_mode = (q_mode.lower() if isinstance(q_mode, str) else q_mode)
+
         if self.q_mode == "selfgen":
             if norm_mean is None or norm_std is None:
                 raise ValueError("OODDetectionDataset(q_mode='selfgen') requires norm_mean and norm_std.")
             self._norm_mean = torch.tensor(norm_mean, dtype=torch.float32).view(-1, 1, 1)
             self._norm_std = torch.tensor(norm_std, dtype=torch.float32).view(-1, 1, 1)
             self._selfgen_grid = selfgen_grid
+            self._getitem_fn = self._getitem_selfgen
+        else:
+            self._getitem_fn = self._getitem_external
+
         self.num_samples = len(in_dist_dataset)
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx):
-        # Get ID image (px) at fixed index
+        return self._getitem_fn(idx)
+
+    def _getitem_external(self, idx):
+        """Get item for external OOD mode."""
         x_in, _ = self.in_dist_dataset[idx]
-        if self.q_mode == "selfgen":
-            # x_ood = T(x_in, x2) with T in {patch_shuffle, phase_rand, cutpaste_cutmix}
-            random_idx = random.randint(0, len(self.in_dist_dataset) - 1)
-            x2, _ = self.in_dist_dataset[random_idx]
-            # Ensure tensors for in-place / device (e.g. phase_rand uses x_in.device)
-            if not isinstance(x_in, torch.Tensor):
-                x_in = torch.from_numpy(np.array(x_in)).float()
-            if not isinstance(x2, torch.Tensor):
-                x2 = torch.from_numpy(np.array(x2)).float()
-            x_ood = _selfgen_ood_transform(
-                x_in, x2,
-                norm_mean=self._norm_mean,
-                norm_std=self._norm_std,
-                grid=self._selfgen_grid,
-            )
-            return x_in, x_ood, torch.tensor(0.0)
-        # External OOD: get qx from ood_dataset at random index
         ood_idx = random.randint(0, len(self.ood_dataset) - 1)
         x_ood, _ = self.ood_dataset[ood_idx]
+        return x_in, x_ood, torch.tensor(0.0)
+    
+    def _getitem_selfgen(self, idx):
+        """Get item for self-generated OOD mode."""
+        x_in, _ = self.in_dist_dataset[idx]
+        
+        # x_ood = T(x_in, x2) with T in {patch_shuffle, phase_rand, cutpaste_cutmix}
+        random_idx = random.randint(0, len(self.in_dist_dataset) - 1)
+        x2, _ = self.in_dist_dataset[random_idx]
+        
+        # Ensure tensors for in-place / device (e.g. phase_rand uses x_in.device)
+        if not isinstance(x_in, torch.Tensor):
+            x_in = torch.from_numpy(np.array(x_in)).float()
+        if not isinstance(x2, torch.Tensor):
+            x2 = torch.from_numpy(np.array(x2)).float()
+            
+        x_ood = _selfgen_ood_transform(
+            x_in, x2,
+            norm_mean=self._norm_mean,
+            norm_std=self._norm_std,
+            grid=self._selfgen_grid,
+        )
         return x_in, x_ood, torch.tensor(0.0)
 
 
