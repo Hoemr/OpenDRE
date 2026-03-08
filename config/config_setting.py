@@ -53,7 +53,7 @@ def get_common_args(parser):
     parser.add_argument("--joint", type=eval, default=True, choices=[True, False])   
     parser.add_argument("--condition", type=eval, default=False, choices=[True, False]) 
     parser.add_argument('--path_type', type=str, default="VP", help="interpolant type")  
-    parser.add_argument('--relative_ratio', type=float, default=0.8, help="relative ratio for relative ratio sampling")
+    parser.add_argument('--relative_ratio', type=float, default=0.2, help="relative ratio for relative ratio sampling")
     parser.add_argument('--scale', type=float, default=1., help="scale of loss terms")
     
     # solver parameters
@@ -67,6 +67,18 @@ def get_common_args(parser):
     parser.add_argument("--OT", action='store_true', default=False)
     parser.add_argument('--sample_noise_std', type=float, default=1e-5, help='Std of additive Gaussian noise for sample perturbation')
     parser.add_argument('--gamma_t', type=float, default=0.01)
+
+    # EDM-style input preconditioning (path-aware total scale)
+    parser.add_argument("--use_edm_precond", action='store_true', default=False)
+    parser.add_argument("--edm_sigma_data", type=float, default=1.0)
+    parser.add_argument("--edm_sigma_min", type=float, default=1e-3)
+    parser.add_argument("--edm_use_noise_embed", action='store_true', default=False,
+                        help="If set, add noise_embed(c_noise) to time_emb; default False (t-only preconditioning).")
+    parser.add_argument("--edm_debug", action='store_true', default=False,
+                        help="If set, log EDM preconditioning stats (s_t, x_t, x_t^in) for verification.")
+    parser.add_argument("--edm_data_var_mode", type=str, default="channelwise", choices=["scalar", "channelwise"])
+    parser.add_argument("--edm_stat_type", type=str, default="second_moment", choices=["variance", "second_moment"],
+                        help="Endpoint stat: second_moment E[x^2] (default, RMS) or variance E[(x-mu)^2]")
 
     # Minimum Variance Path
     parser.add_argument("--mvp", action='store_true', default=False, help="Minimum Variance Path / Gaussian Mixture / Kumaraswamy Mixture")
@@ -355,7 +367,9 @@ def get_save_path(args):
             key_args.extend(["rho"+str(args.rho)])
         
         elif args.subtask == "ood_detection":
-            key_args.extend([args.ood_in_dist, args.image_backbone, f"noise{args.sample_noise_std}",])
+            key_args.extend([args.ood_in_dist, args.image_backbone, args.ood_train, f"noise{args.sample_noise_std}",])
+            if args.use_edm_precond:
+                key_args.extend(["edm"])
             if getattr(args, "ood_use_imglist", False):
                 key_args.append("imglist")
   

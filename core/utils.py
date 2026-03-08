@@ -176,3 +176,56 @@ def divergence_bf(dx, y, **unused_kwargs):
         sum_diag += torch.autograd.grad(dx[:, i].sum(), y, create_graph=True)[0].contiguous()[:, i].contiguous()
     return sum_diag.contiguous()
 
+
+def compute_endpoint_stat(loader, which="px", mode="scalar", stat_type="second_moment", device=None, max_batches=None):
+    """Compute endpoint statistic for EDM preconditioning from train loader.
+
+    Batch format must be (px, qx, ...). Explicitly:
+    - which="px": use only the first tensor (px) from each batch.
+    - which="qx": use only the second tensor (qx) from each batch.
+    Do not use the whole batch or concatenate.
+
+    stat_type: "second_moment" -> E[x^2] (default, RMS-style); "variance" -> E[(x - mu)^2].
+    mode: "scalar" -> single value; "channelwise" -> per-channel (C,) for (B,C,H,W).
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    idx = 0 if which == "px" else 1
+    n = 0
+    sum_x = None
+    sum_sq = None
+    for bi, batch in enumerate(loader):
+        if max_batches is not None and bi >= max_batches:
+            break
+        if isinstance(batch, (list, tuple)):
+            x = batch[idx]
+        else:
+            x = batch
+        x = x.detach().to(device, dtype=torch.float32)
+        if stat_type == "second_moment":
+            sq = x.pow(2)
+        else:
+            sq = x.pow(2)
+        if mode == "scalar":
+            sum_x = x.sum() if sum_x is None else sum_x + x.sum()
+            sum_sq = sq.sum() if sum_sq is None else sum_sq + sq.sum()
+            n += x.numel()
+        else:
+            # channelwise: (B, C, H, W) -> reduce (B,H,W) -> (C,)
+            if x.dim() == 4:
+                sum_x = x.sum(dim=(0, 2, 3)) if sum_x is None else sum_x + x.sum(dim=(0, 2, 3))
+                sum_sq = sq.sum(dim=(0, 2, 3)) if sum_sq is None else sum_sq + sq.sum(dim=(0, 2, 3))
+                n += x.shape[0] * x.shape[2] * x.shape[3]
+            else:
+                # tabular (B, D)
+                sum_x = x.sum(dim=0) if sum_x is None else sum_x + x.sum(dim=0)
+                sum_sq = sq.sum(dim=0) if sum_sq is None else sum_sq + sq.sum(dim=0)
+                n += x.shape[0]
+    if n == 0:
+        return torch.ones(1, device=device)
+    if stat_type == "second_moment":
+        return (sum_sq / n).clamp(min=1e-8)
+    # variance: E[x^2] - E[x]^2
+    mean_x = sum_x / n
+    return (sum_sq / n - mean_x.pow(2)).clamp(min=1e-8)
+

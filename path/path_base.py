@@ -19,7 +19,7 @@ def logit_transform(image, lambd=1e-6):
     return image, ldj
 
 
-class Path(abc.ABC, torch.nn.Module):
+class BasePath(abc.ABC, torch.nn.Module):
     """Path abstract class (ODE or SDE). Functions are designed for a mini-batch of inputs."""
 
     def __init__(self, N):
@@ -28,7 +28,7 @@ class Path(abc.ABC, torch.nn.Module):
         Args:
           N: number of discretization time steps.
         """
-        super(Path, self).__init__()
+        super(BasePath, self).__init__()
         abc.ABC.__init__(self)  # ABC
         self.N = N
 
@@ -98,7 +98,7 @@ class Path(abc.ABC, torch.nn.Module):
         drift_diffusion_fn = self.drift_diffusion
         discretize_fn = self.discretize
 
-        class RPath(self.__class__):
+        class RBasePath(self.__class__):
             def __init__(self):
                 self.N = N
                 self.probability_flow = probability_flow
@@ -130,7 +130,7 @@ class Path(abc.ABC, torch.nn.Module):
                 rev_G = torch.zeros_like(G) if self.probability_flow else G
                 return rev_f, rev_G
 
-        return RPath()
+        return RBasePath()
 
 class OTPlanSampler:
     """OTPlanSampler implements sampling coordinates according to an OT plan (wrt squared Euclidean
@@ -338,7 +338,7 @@ class OTPlanSampler:
         to_return = np.stack(to_return, axis=1)
         return to_return
 
-class InterpXt(Path):
+class InterpXt(BasePath):
     def __init__(self, args=None, N=1000, beta_min=0.1, beta_max=20, data_ndim=2):
         super().__init__(N)
         self.args = args
@@ -673,7 +673,66 @@ class InterpXt(Path):
     
     def get_coefficients_and_derivatives(self, t):
         return self.coefficients_and_derivatives_fns(t)
-    
+
+    def total_scale_squared(self, t, v0, v1):
+        """Path-aware total effective scale s_t^2 for EDM input preconditioning.
+
+        Default path (x_t = alpha_t x0 + beta_t x1):
+            s_t^2 = alpha_t^2 * v0 + beta_t^2 * v1
+        Bridge path (with additive noise), matching marginal_var_fn and marginal_sample:
+            s_t^2 = alpha_t^2 * v0 + beta_t^2 * v1 + gamma^2 * t * (1-t) + (alpha_t^2 + beta_t^2) * epsilon
+
+        Units (must match set_marginal_var_fns / marginal_sample):
+        - self.gamma_t stores gamma^2 (variance scale of the t(1-t) term).
+        - self.sample_noise_std is used as epsilon (variance) in (alpha_t^2+beta_t^2)*epsilon.
+          If it were ever supplied as a standard deviation, the term would be (a2+b2)*sample_noise_std**2.
+
+        v0, v1: scalar or per-channel tensor (C,); correspond to endpoint 0 (alpha_t) and 1 (beta_t).
+        Returns: (B, 1) if v0,v1 scalar; (B, C) if per-channel, for broadcasting with x_t.
+        """
+        alpha_t, beta_t = self.get_alpha_t_beta_t(t)
+        alpha_t = alpha_t.reshape(-1, 1)
+        beta_t = beta_t.reshape(-1, 1)
+        a2 = alpha_t ** 2
+        b2 = beta_t ** 2
+        v0 = torch.as_tensor(v0, device=t.device, dtype=t.dtype)
+        v1 = torch.as_tensor(v1, device=t.device, dtype=t.dtype)
+        if v0.dim() == 0 and v1.dim() == 0:
+            s_t2 = a2 * v0 + b2 * v1
+        else:
+            if v0.dim() == 0:
+                v0 = v0.unsqueeze(0)
+            if v1.dim() == 0:
+                v1 = v1.unsqueeze(0)
+            v0 = v0.reshape(1, -1)
+            v1 = v1.reshape(1, -1)
+            s_t2 = a2 * v0 + b2 * v1
+        if self.bridge:
+            t_flat = t.reshape(-1, 1)
+            s_t2 = s_t2 + self.gamma_t * t_flat * (1.0 - t_flat) + (a2 + b2) * self.sample_noise_std
+        return s_t2
+
+    def total_scale_squared_t_only(self, t):
+        """t-only path-based scale s_t^2 for EDM input preconditioning (no endpoint statistics).
+
+        Default path (x_t = alpha_t x0 + beta_t x1):
+            s_t^2 = alpha_t^2 + beta_t^2
+        Bridge path (with additive noise), same units as marginal_var_fn:
+            s_t^2 = alpha_t^2 + beta_t^2 + gamma^2 t(1-t) + (alpha_t^2 + beta_t^2) * epsilon
+        Uses self.gamma_t as gamma^2 and self.sample_noise_std as epsilon (variance).
+        Returns: (B, 1) for broadcasting with x_t.
+        """
+        alpha_t, beta_t = self.get_alpha_t_beta_t(t)
+        alpha_t = alpha_t.reshape(-1, 1)
+        beta_t = beta_t.reshape(-1, 1)
+        a2 = alpha_t ** 2
+        b2 = beta_t ** 2
+        s_t2 = a2 + b2
+        if self.bridge:
+            t_flat = t.reshape(-1, 1)
+            s_t2 = s_t2 + self.gamma_t * t_flat * (1.0 - t_flat) + (a2 + b2) * self.sample_noise_std
+        return s_t2
+
     def get_weights_denoise(self, t, x0=None, x1=None, x0_norm_sq=None, x1_norm_sq=None, x0x1_norm_sq=None, 
                             alpha_t=None, beta_t=None, d_alpha_dt=None, d_beta_dt=None, path_type=None):
         # weight is inversely proportional to variance, only used for variance-based importance sampling

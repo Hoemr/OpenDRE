@@ -14,6 +14,7 @@ class JointScoreModel(UnifiedModel):
         norm=False,
         use_spectral_norm=False,
         dynamic=False,
+        path=None,
     ):
         super().__init__(
             model_type='joint_score',
@@ -27,6 +28,7 @@ class JointScoreModel(UnifiedModel):
             norm=norm,
             use_spectral_norm=use_spectral_norm,
             dynamic=dynamic,
+            path=path,
         )
 
 
@@ -45,6 +47,7 @@ class DecompJointScoreModel(UnifiedModel):
         norm=False,
         use_spectral_norm=False,
         dynamic=False,
+        path=None,
     ):
         super().__init__(
             model_type='decomp_joint_score',
@@ -61,6 +64,7 @@ class DecompJointScoreModel(UnifiedModel):
             norm=norm,
             use_spectral_norm=use_spectral_norm,
             dynamic=dynamic,
+            path=path,
         )
 
 

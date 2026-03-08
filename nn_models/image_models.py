@@ -4,7 +4,7 @@ from .unified import UnifiedModel
 
 
 class ImageJointScoreModel(UnifiedModel):
-    def __init__(self, args, in_channels, hidden_channels, embed_dim=128, nonlinearity="leakyrelu", backbone='unet', dropout=0.0):
+    def __init__(self, args, in_channels, hidden_channels, embed_dim=128, nonlinearity="leakyrelu", backbone='unet', dropout=0.0, path=None):
         super().__init__(
             model_type='joint_score',
             data_type='image',
@@ -14,13 +14,14 @@ class ImageJointScoreModel(UnifiedModel):
             embed_dim=embed_dim,
             nonlinearity=nonlinearity,
             args=args,
-            dropout=dropout
+            dropout=dropout,
+            path=path,
         )
 
 
 class ImageDecompJointScoreModel(UnifiedModel):
     def __init__(self, args, in_channels, hidden_channels, embed_dim=128, K=300,
-                 nonlinearity="leakyrelu", polynomials="gaussrbf", noise_type="zero"):
+                 nonlinearity="leakyrelu", polynomials="gaussrbf", noise_type="zero", path=None):
         super().__init__(
             model_type='decomp_joint_score',
             data_type='image',
@@ -32,13 +33,14 @@ class ImageDecompJointScoreModel(UnifiedModel):
             nonlinearity=nonlinearity,
             polynomials=polynomials,
             noise_type=noise_type,
-            args=args
+            args=args,
+            path=path,
         )
 
 
 class ImageJointScoreModelResNet(UnifiedModel):
     def __init__(self, args, in_channels, hidden_channels, embed_dim=128, nonlinearity="leakyrelu",
-                 backbone='resnet18', dropout=0.3):
+                 backbone='resnet18', dropout=0.3, path=None):
         super().__init__(
             model_type='joint_score',
             data_type='image',
@@ -48,14 +50,15 @@ class ImageJointScoreModelResNet(UnifiedModel):
             embed_dim=embed_dim,
             nonlinearity=nonlinearity,
             args=args,
-            dropout=dropout
+            dropout=dropout,
+            path=path,
         )
 
 
 class ImageDecompJointScoreModelResNet(UnifiedModel):
     def __init__(self, args, in_channels, hidden_channels, embed_dim=128, K=300,
                  nonlinearity="leakyrelu", polynomials="gaussrbf", noise_type="zero",
-                 backbone='resnet18', dropout=0.3):
+                 backbone='resnet18', dropout=0.3, path=None):
         super().__init__(
             model_type='decomp_joint_score',
             data_type='image',
@@ -68,7 +71,8 @@ class ImageDecompJointScoreModelResNet(UnifiedModel):
             polynomials=polynomials,
             noise_type=noise_type,
             args=args,
-            dropout=dropout
+            dropout=dropout,
+            path=path,
         )
 
 

@@ -192,23 +192,23 @@ def _cutpaste_cutmix(x_in, x2):
     return out
 
 
-# def _selfgen_ood_transform(x_in, x2, norm_mean, norm_std, grid=4):
-#     """Choose one of patch_shuffle, phase_rand, cutpaste_cutmix at random; return x_ood."""
-#     choice = random.randint(0, 2)
-#     if choice == 0:
-#         return _patch_shuffle(x_in, grid=grid)
-#     if choice == 1:
-#         return _phase_rand(x_in, norm_mean, norm_std)
-#     return _cutpaste_cutmix(x_in, x2)
-
 def _selfgen_ood_transform(x_in, x2, norm_mean, norm_std, grid=4):
-    r = random.random()
-    if r < 0.60:
-        return _cutpaste_cutmix(x_in, x2)   # cross-class x2
-    elif r < 0.85:
+    """Choose one of patch_shuffle, phase_rand, cutpaste_cutmix at random; return x_ood."""
+    choice = random.randint(0, 2)
+    if choice == 0:
         return _patch_shuffle(x_in, grid=grid)
-    else:
+    if choice == 1:
         return _phase_rand(x_in, norm_mean, norm_std)
+    return _cutpaste_cutmix(x_in, x2)
+
+# def _selfgen_ood_transform(x_in, x2, norm_mean, norm_std, grid=4):
+#     r = random.random()
+#     if r < 0.60:
+#         return _cutpaste_cutmix(x_in, x2)   # cross-class x2
+#     elif r < 0.85:
+#         return _patch_shuffle(x_in, grid=grid)
+#     else:
+#         return _phase_rand(x_in, norm_mean, norm_std)
 
 def get_ood_imglist_transforms(split, normalization_type="cifar10", image_size=32, pre_size=None):
     mean, std = OOD_IMGLIST_NORMALIZATION.get(normalization_type, OOD_IMGLIST_NORMALIZATION["cifar10"])

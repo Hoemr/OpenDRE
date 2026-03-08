@@ -41,9 +41,9 @@ class UnifiedModel(nn.Module):
     
     def __init__(self, model_type='joint_score', data_type='tabular', backbone='mlp',
                  input_dim=None, in_channels=None, hidden_dims=None, hidden_channels=None,
-                 K=300, embed_dim=256, nonlinearity="leakyrelu", polynomials="gaussrbf", 
+                 K=300, embed_dim=256, nonlinearity="leakyrelu", polynomials="imqrbf", 
                  noise_type="zero", args=None, norm=False, use_spectral_norm=False, 
-                 dynamic=False, dropout=0.3):
+                 dynamic=False, dropout=0.3, path=None):
         super().__init__()
         
         self.model_type = model_type
@@ -54,6 +54,15 @@ class UnifiedModel(nn.Module):
         self.K = K
         self.embed_dim = embed_dim
         self.nonlinearity = nonlinearity
+        self.path = path
+        # EDM input preconditioning (t-only path-based scale; no endpoint stats by default)
+        self.use_edm_precond = getattr(args, 'use_edm_precond', False)
+        self.edm_sigma_data = getattr(args, 'edm_sigma_data', 1.0)
+        self.edm_sigma_min = getattr(args, 'edm_sigma_min', 1e-3)
+        self.edm_use_noise_embed = getattr(args, 'edm_use_noise_embed', False)
+        self.edm_debug = getattr(args, 'edm_debug', False)
+        self.register_buffer('edm_v_src', None)
+        self.register_buffer('edm_v_dst', None)
         
         # Initialize polynomial decomposition if needed
         if model_type == 'decomp_joint_score':
@@ -115,6 +124,17 @@ class UnifiedModel(nn.Module):
                 self._img_channels, self._img_height, self._img_width = DATA_SHAPES[data_shape]
             else:
                 self._img_channels, self._img_height, self._img_width = in_channels, 32, 32
+
+        # EDM: optional noise (log-scale) embedding; disabled by default (edm_use_noise_embed=False)
+        if self._is_time_dependent and self.use_edm_precond and self.edm_use_noise_embed:
+            time_emb_dim = self.embed_dim if data_type == 'image' else self.input_dim
+            self.noise_embed = nn.Sequential(
+                nn.Linear(1, time_emb_dim),
+                nn.SiLU(),
+                nn.Linear(time_emb_dim, time_emb_dim),
+            )
+        else:
+            self.noise_embed = None
         
         self._initialize_weights()
         self.nfe = 0  # Number of function evaluations
@@ -455,6 +475,46 @@ class UnifiedModel(nn.Module):
     def reset_states(self):
         """Reset function evaluation counter."""
         self.nfe = 0
+
+    def set_edm_endpoint_stats(self, v_src, v_dst):
+        """Set endpoint statistics for EDM total scale (v0=edm_v_src, v1=edm_v_dst)."""
+        dev = next(self.parameters()).device
+        self.register_buffer('edm_v_src', v_src.to(dev))
+        self.register_buffer('edm_v_dst', v_dst.to(dev))
+
+    def _edm_precond_input(self, t, x):
+        """EDM input scaling (t-only path-based scale; no endpoint stats). Returns (x_scaled, c_noise or None)."""
+        if not self.use_edm_precond or self.path is None:
+            return x, None
+        s_t2 = self.path.total_scale_squared_t_only(t)
+        s_t = torch.sqrt(s_t2.clamp(min=1e-10)).clamp(min=self.edm_sigma_min)
+        c_in = 1.0 / torch.sqrt(self.edm_sigma_data ** 2 + s_t ** 2)
+        if x.dim() == 4:
+            c_in = c_in.view(-1, 1, 1, 1)
+        elif x.dim() == 2:
+            c_in = c_in.view(-1, 1)
+        x_scaled = c_in * x
+        c_noise = None
+        if self.edm_use_noise_embed and self.noise_embed is not None:
+            s_t_scalar = s_t
+            if s_t.dim() == 2 and s_t.shape[1] > 1:
+                s_t_scalar = torch.sqrt((s_t ** 2).mean(dim=1, keepdim=True))
+            c_noise = (0.25 * torch.log(s_t_scalar.clamp(min=1e-10)))
+        if self.edm_debug:
+            with torch.no_grad():
+                path_type = "bridge" if getattr(self.path, "bridge", False) else "default"
+                noise_embed_on = self.edm_use_noise_embed and self.noise_embed is not None
+                st_mean, st_std = s_t.float().mean().item(), s_t.float().std().item()
+                st_min, st_max = s_t.float().min().item(), s_t.float().max().item()
+                x_mean, x_std = x.float().mean().item(), x.float().std().item()
+                xs_mean, xs_std = x_scaled.float().mean().item(), x_scaled.float().std().item()
+                import logging
+                logging.getLogger(__name__).info(
+                    f"EDM_precond: path={path_type} noise_embed={noise_embed_on} | "
+                    f"s_t mean={st_mean:.4f} std={st_std:.4f} min={st_min:.4f} max={st_max:.4f} | "
+                    f"x_t raw mean={x_mean:.4f} std={x_std:.4f} | x_t^in mean={xs_mean:.4f} std={xs_std:.4f}"
+                )
+        return x_scaled, c_noise
     
     def set_fk(self, f_k=None):
         """Set f_k values for decomposition models."""
@@ -598,14 +658,19 @@ class UnifiedModel(nn.Module):
     def _forward_tabular_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for tabular time-dependent models."""
         self.nfe += 1
-
-        time_emb = self.time_emb(t)  # [B, timeemb_outdim] 
-        if cond is not None: 
-            rel_time_emb = self.time_emb(t - cond)
-            # rel_time_emb = self.delta_emb(t - cond)
-            concat_emb = torch.cat([time_emb, rel_time_emb], dim=-1)
-            time_emb = self.time_fusion(concat_emb) if hasattr(self, 'time_fusion') else time_emb
-            # time_emb += self.time_emb(t - cond)
+        x, c_noise = self._edm_precond_input(t, x)
+        if self.time_embed is not None:
+            time_emb = self.time_emb(t)  # [B, timeemb_outdim]
+            if c_noise is not None and self.noise_embed is not None:
+                time_emb = time_emb + self.noise_embed(c_noise)
+            if cond is not None: 
+                rel_time_emb = self.time_emb(t - cond)
+                # rel_time_emb = self.delta_emb(t - cond)
+                concat_emb = torch.cat([time_emb, rel_time_emb], dim=-1)
+                time_emb = self.time_fusion(concat_emb) if hasattr(self, 'time_fusion') else time_emb
+                # time_emb += self.time_emb(t - cond)
+        else:
+            time_emb = None
         
         # Process through shared layers
         for layer in self.shared_layers:
@@ -632,10 +697,12 @@ class UnifiedModel(nn.Module):
     def _forward_unet_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for UNet-based time-dependent models."""
         self.nfe += 1
-        
+        x, c_noise = self._edm_precond_input(t, x)
         # Get time embedding only if time_embed exists
         if self.time_embed is not None:
             t_emb = self.time_embed(t).squeeze()
+            if c_noise is not None and self.noise_embed is not None:
+                t_emb = t_emb + self.noise_embed(c_noise)
             if cond is not None:
                 rel_temb = self.time_embed(t - cond)
                 # Apply time fusion if available
@@ -676,11 +743,13 @@ class UnifiedModel(nn.Module):
     def _forward_resnet_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for ResNet-based time-dependent models."""
         self.nfe += 1
-        
+        x, c_noise = self._edm_precond_input(t, x)
         # Get time embedding only if time_embed exists
         # For decomp models, time is handled by polynomial basis, not by network
         if self.time_embed is not None:
             t_emb = self.time_embed(t).squeeze()
+            if c_noise is not None and self.noise_embed is not None:
+                t_emb = t_emb + self.noise_embed(c_noise)
             if cond is not None:
                 rel_temb = self.time_embed(t - cond)
                 # Apply time fusion if available

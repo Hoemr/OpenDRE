@@ -298,8 +298,8 @@ class ScoreMatchingTrainStepFn(nn.Module):
         elbo = self.path.bayesian_path.elbo(x0, x1, t, variance=variance, score_reg=score_reg)
         
         weight = 1. / time_score_var.mean()
-        return loss - elbo
-        # return weight * (loss - elbo)
+        # return loss - elbo
+        return weight * (loss - elbo)
         # return self.adaptive_loss_weighting([loss * weight, -elbo * weight])
     
     def time_score_matching(self, score_model, x0, x1, t0, t1, t, l=None, decomp=False, batch_size=None, dim=1):    

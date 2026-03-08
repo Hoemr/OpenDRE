@@ -311,6 +311,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     backbone=image_backbone,
                     dropout=image_dropout,
                     nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
+                    path=self.path,
                 )
             else:
                 return base_models.ImageJointScoreModel(
@@ -321,6 +322,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     backbone=image_backbone,
                     dropout=image_dropout,
                     nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
+                    path=self.path,
                 )
         else:
             hidden_dims = list(map(int, self.args.dims.split("-")))
@@ -356,6 +358,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     args=self.args,
                     norm=self.args.norm,
                     use_spectral_norm=self.args.specnorm,
+                    path=self.path,
                 )
             else:
                 return base_models.JointScoreModel(
@@ -366,6 +369,7 @@ class DensityRatioEstimationModel(pl.LightningModule):
                     args=self.args,
                     norm=self.args.norm,
                     use_spectral_norm=self.args.specnorm,
+                    path=self.path,
                 )
 
     def build_model(self):
@@ -375,6 +379,10 @@ class DensityRatioEstimationModel(pl.LightningModule):
 
     def get_dr_fn(self):
         return get_density_ratio_fn(self.path, args=self.args, quad_step=self.args.quad_step)
+
+    def on_fit_start(self):
+        """EDM preconditioning is now t-only by default; no train-set endpoint stats required."""
+        super().on_fit_start()
 
     def forward(self, t, x):
         return self.model(t, x)
