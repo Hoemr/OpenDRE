@@ -658,7 +658,10 @@ class UnifiedModel(nn.Module):
     def _forward_tabular_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for tabular time-dependent models."""
         self.nfe += 1
-        x, c_noise = self._edm_precond_input(t, x)
+        if self.use_edm_precond:
+            x, c_noise = self._edm_precond_input(t, x)
+        else:
+            c_noise = None
         if self.time_embed is not None:
             time_emb = self.time_emb(t)  # [B, timeemb_outdim]
             if c_noise is not None and self.noise_embed is not None:
@@ -697,7 +700,10 @@ class UnifiedModel(nn.Module):
     def _forward_unet_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for UNet-based time-dependent models."""
         self.nfe += 1
-        x, c_noise = self._edm_precond_input(t, x)
+        if self.use_edm_precond:
+            x, c_noise = self._edm_precond_input(t, x)
+        else:
+            c_noise = None
         # Get time embedding only if time_embed exists
         if self.time_embed is not None:
             t_emb = self.time_embed(t).squeeze()
@@ -743,7 +749,10 @@ class UnifiedModel(nn.Module):
     def _forward_resnet_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for ResNet-based time-dependent models."""
         self.nfe += 1
-        x, c_noise = self._edm_precond_input(t, x)
+        if self.use_edm_precond:
+            x, c_noise = self._edm_precond_input(t, x)
+        else:
+            c_noise = None
         # Get time embedding only if time_embed exists
         # For decomp models, time is handled by polynomial basis, not by network
         if self.time_embed is not None:

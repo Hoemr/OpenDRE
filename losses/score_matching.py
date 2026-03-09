@@ -484,16 +484,16 @@ class ScoreMatchingTrainStepFn(nn.Module):
  
             # fk_x0 = all_loss_terms["boundary_loss_terms"]["fk_x0"]
             # fk_x1 = all_loss_terms["boundary_loss_terms"]["fk_x1"]
-            # fk_xt = all_loss_terms["fk_xt"]
+            fk_xt = all_loss_terms["fk_xt"]
 
-            # if self.auxiliary_loss:
-            #     # bregman divergence
-            #     # logr0 = score_model.compute_weighted_sum(x0, f_k=fk_x0)
-            #     # logr1 = score_model.compute_weighted_sum(x1, f_k=fk_x1)
-            #     logr0 = score_model.compute_weighted_sum(x0)
-            #     logr1 = score_model.compute_weighted_sum(x1)
-            #     bregman = self.bregman_div_loss(logr0, logr1, bregman_type=self.bregman_type)
-            #     reg_loss += bregman
+            if self.auxiliary_loss:
+                # bregman divergence
+                # logr0 = score_model.compute_weighted_sum(x0, f_k=fk_x0)
+                # logr1 = score_model.compute_weighted_sum(x1, f_k=fk_x1)
+                logr0 = score_model.compute_weighted_sum(x0)
+                logr1 = score_model.compute_weighted_sum(x1)
+                bregman = self.bregman_div_loss(logr0, logr1, bregman_type=self.bregman_type)
+                reg_loss += bregman
                 
             #     # if self.task == "likelihood_estimation":
             #     #     nll = - (logr1.view((batch_size, 1)) + self.path.prior_logp(x1).view((batch_size, 1))).mean()
@@ -512,7 +512,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
             
             # # # loss = loss + reg_loss #/ self.K 
             
-            # loss = loss + reg_loss
+            loss = loss + reg_loss
 
             score_model.set_fk()
             score_model.Pk.set_cached_sigma()

@@ -21,7 +21,8 @@ def _ood_metrics(labels, scores):
         return {"auroc": np.nan, "fpr95": np.nan, "aupr_in": np.nan, "aupr_out": np.nan, "acc": np.nan}
     id_scores = scores[labels == 1]
     ood_scores = scores[labels == 0]
-    thresh = np.percentile(id_scores, 5.0)  # 95% of ID above this -> TPR 95%
+    # thresh = np.percentile(id_scores, 5.0)  # 95% of ID above this -> TPR 95%
+    thresh = np.percentile(id_scores, 5.0, interpolation='higher')
     fpr95 = float(np.mean(ood_scores >= thresh))
     pred = (scores >= thresh).astype(np.float64)
     acc = float(np.mean(pred == labels))
