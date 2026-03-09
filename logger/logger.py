@@ -307,10 +307,13 @@ class TxtLoggerCallback(pl.Callback):
         )
     
     def _ood_val(self, trainer, pl_module):
-        # OOD validation is always logged by the model in on_validation_epoch_end (pl_models/ood_detection.py).
-        # Do not log here: in Lightning v2 the callback runs before the model (empty line), and when
-        # metrics exist they are from the previous validation, causing a duplicate line with stale numbers.
-        pass
+        # OOD validation is logged by the model in on_validation_epoch_end (pl_models/ood_detection.py).
+        # Log early stopping counter here after the model has logged its metrics.
+        if self.early_stopping_callback and trainer.is_global_zero:
+            wait_count = self.early_stopping_callback.wait_count
+            patience = self.early_stopping_callback.patience
+            best_score = self.early_stopping_callback.best_score
+            self.logger.info(f"EarlyStopping counter: {wait_count}/{patience} (best near-AUROC: {best_score:.4f})")
     
     def _ood_test(self, trainer, pl_module):
         # OOD test is logged by the model in on_test_epoch_end; skip here to avoid duplicate/stale lines.

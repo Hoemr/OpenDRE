@@ -93,6 +93,8 @@ def get_common_args(parser):
     parser.add_argument("--noise_type", type=str, default="zero")
     parser.add_argument('--clip_tau', type=float, default=1.)
     parser.add_argument("--auxiliary_loss", action='store_false', default=True)
+    parser.add_argument("--auxiliary_quad_steps", type=int, default=5,
+                        help="Quadrature steps for log r(x) in auxiliary Bregman loss (non-decomp); kept small for training.")
     parser.add_argument("--bregman_type", type=str, default="logistic")
     parser.add_argument("--shape_type", type=str, default="uniform")
     
@@ -177,7 +179,7 @@ def get_fdiv_args(parser):
  
     # Image backbone (ResNet or WideResNet for all image-related tasks)
     parser.add_argument('--image_backbone', type=str, default='unet', choices=['unet', 'resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'], help='Backbone network for image-based tasks (OOD detection, real images, etc.)')
-    parser.add_argument('--image_backbone_norm', type=str, default='batchnorm', choices=['batchnorm', 'groupnorm'], help='Norm layer in image backbone: batchnorm or groupnorm (groupnorm often more stable for small batches / OOD)')
+    parser.add_argument('--image_backbone_norm', type=str, default='groupnorm', choices=['batchnorm', 'groupnorm'], help='Norm layer in image backbone: batchnorm or groupnorm (groupnorm often more stable for small batches / OOD)')
     parser.add_argument('--image_backbone_num_groups', type=int, default=8, help='Number of groups for GroupNorm when image_backbone_norm=groupnorm')
     parser.add_argument('--image_dropout', type=float, default=0.3, help='Dropout rate for WideResNet backbone')
     return parser

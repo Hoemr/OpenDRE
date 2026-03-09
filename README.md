@@ -51,7 +51,7 @@ The codebase is split into top-level packages for easier navigation:
 
 | Package | Contents |
 |---------|----------|
-| `nn_models/` | Neural network models (UnifiedModel, JointScore, ResNet DRE, etc.) |
+| `nn_models/` | Neural network models (`tabular_models`, `image_models`, legacy `UnifiedModel` wrapper) |
 | `layers/` | Building blocks: custom layers (`layers.py`), activations (`activations.py`) |
 | `polynomials/` | Polynomial basis (e.g. for score decomposition) |
 | `pl_data/` | Lightning DataModules and dataset configs |
@@ -336,14 +336,66 @@ No need to copy large blocks: open the corresponding file for an existing subtas
 
 ## Model Architecture (nn_models/)
 
-Models live in `nn_models/`: tabular in `tabular_models.py`, image in `image_models.py`, unified API in `unified.py`. Use the existing pl_models’ `build_model()` as the reference for constructor arguments.
+Models live in `nn_models/`:
 
-| Use case | Tabular | Image |
-|----------|---------|--------|
-| Score s(x,t) | `JointScoreModel`, `DecompJointScoreModel` | `ImageJointScoreModel`, `ImageDecompJointScoreModelResNet` |
-| Density ratio r(x) | `NeuralDensityRatioModel` | `ResNetDensityRatioModel` |
+- `tabular_models.py`: tabular score and density-ratio models
+- `image_models.py`: image-based UNet/ResNet/WideResNet score and density-ratio models
+- `unified.py`: thin **compatibility wrapper** (`UnifiedModel`) that dispatches to the
+  concrete models above. New code should use `tabular_models` / `image_models` directly.
 
-Example (tabular score model): `JointScoreModel(input_dim, hidden_dims=[128,128], embed_dim=256, nonlinearity="leakyrelu", args=args)`. For image backbones (ResNet, WideResNet), see `pl_models/ood_detection.py` or `pl_models/density_estimation_real_image.py` for how the pl_model builds the nn_model. Activation and polynomial options are in the docstrings and config; see `nn_models/unified.py` and `layers/activations.py` for details.
+Use the existing `pl_models`’ `build_model()` methods as the reference for constructor
+arguments and how models are wired into tasks.
+
+### Existing model classes
+
+| Use case | Tabular | Image (UNet / ResNet / WRN) |
+|----------|---------|-----------------------------|
+| Score \(s(x, t)\) | `JointScoreModel`, `DecompJointScoreModel` | `ImageJointScoreModel` (UNet), `ImageJointScoreModelResNet`, `ImageDecompJointScoreModel` (UNet), `ImageDecompJointScoreModelResNet` |
+| Density ratio \(r(x) = p(x)/q(x)\) | `NeuralDensityRatioModel` | `ResNetDensityRatioModel` |
+
+Example (tabular joint score model):
+
+```python
+from nn_models import JointScoreModel
+
+model = JointScoreModel(
+    input_dim=args.d,
+    hidden_dims=[256, 256, 256],
+    embed_dim=args.embed_dim,
+    nonlinearity=args.nonlinearity,
+    args=args,
+)
+```
+
+For image backbones (UNet / ResNet / WideResNet), see `pl_models/ood_detection.py` or
+`pl_models/density_estimation_real_image.py` for how the Lightning modules build the
+corresponding nn_models based on `args.image_backbone`, `args.image_backbone_norm`,
+`args.image_dropout`, etc. Activation and polynomial options are documented in
+`layers/activations.py` and in the model docstrings in `tabular_models.py` /
+`image_models.py`.
+
+### Adding a new model
+
+You **do not** need to modify `UnifiedModel` when adding a new model. Instead:
+
+- **New tabular model**
+  1. Implement a new class in `nn_models/tabular_models.py` (e.g. `MyTabularJointScoreModel`),
+     following the patterns of `JointScoreModel` or `DecompJointScoreModel`.
+  2. If a task should use this model, update the corresponding `pl_models/*` Lightning
+     module (`build_model()` or `_build_default_model()`) to instantiate your class.
+
+- **New image backbone or image model**
+  1. Implement a new class in `nn_models/image_models.py` (e.g. `MyImageJointScoreModel`),
+     or extend the ResNet/UNet helpers if you add a new backbone.
+  2. Wire it in `pl_models` where image models are built, typically in
+     `pl_models/ood_detection.py`, `pl_models/density_estimation_real_image.py`, or
+     `pl_models/mi_real.py`, based on `args.image_backbone` or a new flag you add.
+
+- **Optional compatibility layer**
+  - Only if you still rely on `UnifiedModel` in legacy scripts, you can extend
+    `nn_models/unified.py` to route a new `(data_type, model_type, backbone)` combination
+    to your new concrete model. For all new code paths, prefer using
+    `tabular_models` / `image_models` directly.
 
 ## Directory Layout
 
@@ -353,7 +405,7 @@ OS_DRE/
 ├── config/           # Argument parsing (e.g. config_setting.py)
 ├── pl_data/          # DataModules and dataset configs
 ├── pl_models/        # Lightning modules per task
-├── nn_models/        # Model architectures (UnifiedModel, JointScore, ResNet DRE, etc.)
+├── nn_models/        # Model architectures (tabular_models, image_models, legacy UnifiedModel wrapper)
 ├── path/             # Path (ODE/SDE), Bayesian path
 ├── losses/           # Score matching, kernel/neural DRE losses
 ├── estimators/       # Likelihood and density-ratio estimators

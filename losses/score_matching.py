@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import math
 
 from core.utils import divergence_approx, jacobian_frobenius_divergence_approx
-from estimators.estimators import secant_to_tangent
+from estimators.estimators import secant_to_tangent, get_density_ratio_fn
 
 
 class TimeSampler(nn.Module):
@@ -116,7 +116,20 @@ class ScoreMatchingTrainStepFn(nn.Module):
         self.auxiliary_loss = args.auxiliary_loss
         self.bregman_type = args.bregman_type
         self.clip_tau = torch.tensor(args.clip_tau)
-        
+        self._auxiliary_quad_steps = getattr(args, "auxiliary_quad_steps", 5)
+
+        # For non-decomp auxiliary loss: log r(x) = int_0^1 s_t(t,x) dt (differentiable via quadrature)
+        self._nondecomp_log_ratio_fn = None
+        if (
+            not getattr(args, "decomp", False)
+            and getattr(args, "sub_method", "score") == "score"
+            and not getattr(args, "SAI", False)
+            and not getattr(args, "energy", False)
+        ):
+            self._nondecomp_log_ratio_fn = get_density_ratio_fn(
+                self.path, self.args, quad_step=self._auxiliary_quad_steps
+            )
+
         # normalized energy modeling
         self.energy = getattr(args, "energy", False)
         joint = self.joint if not self.energy else True
@@ -478,48 +491,35 @@ class ScoreMatchingTrainStepFn(nn.Module):
         self.step += 1
         
         nll = torch.zeros_like(t)
-        if decomp:
-            reg_loss = 0.
-            base_weight = 1. / self.K 
- 
-            # fk_x0 = all_loss_terms["boundary_loss_terms"]["fk_x0"]
-            # fk_x1 = all_loss_terms["boundary_loss_terms"]["fk_x1"]
-            fk_xt = all_loss_terms["fk_xt"]
+        reg_loss = 0.0
 
-            if self.auxiliary_loss:
-                # bregman divergence
-                # logr0 = score_model.compute_weighted_sum(x0, f_k=fk_x0)
-                # logr1 = score_model.compute_weighted_sum(x1, f_k=fk_x1)
+        if decomp:
+            base_weight = 1. / self.K
+            fk_xt = all_loss_terms["fk_xt"]
+            if hasattr(score_model, "set_fk"):
+                score_model.set_fk()
+            if hasattr(score_model, "Pk") and score_model.Pk is not None:
+                score_model.Pk.set_cached_sigma()
+
+        # Auxiliary Bregman loss: decomp uses compute_weighted_sum; non-decomp uses int s_t(t,x) dt (differentiable)
+        if self.auxiliary_loss:
+            logr0, logr1 = None, None
+            if hasattr(score_model, "compute_weighted_sum"):
                 logr0 = score_model.compute_weighted_sum(x0)
                 logr1 = score_model.compute_weighted_sum(x1)
+            elif self._nondecomp_log_ratio_fn is not None:
+                logr0, _ = self._nondecomp_log_ratio_fn(
+                    score_model, x0, joint=False, steps=self._auxiliary_quad_steps
+                )
+                logr1, _ = self._nondecomp_log_ratio_fn(
+                    score_model, x1, joint=False, steps=self._auxiliary_quad_steps
+                )
+            if logr0 is not None and logr1 is not None:
                 bregman = self.bregman_div_loss(logr0, logr1, bregman_type=self.bregman_type)
-                reg_loss += bregman
-                
-            #     # if self.task == "likelihood_estimation":
-            #     #     nll = - (logr1.view((batch_size, 1)) + self.path.prior_logp(x1).view((batch_size, 1))).mean()
-            #     #     # nll = - score_model.likelihood_estimation(x1, f_k=fk_x1).view((batch_size, 1))
-                    
-            #     #     # bpd = nll / (np.log(2) * np.prod(x1.shape[1:]))  # bpd
-            #     #     reg_loss += (nll - log_det_J.mean()) / torch.tensor((np.log(2) * np.prod(x1.shape[1:]))).to(x1)
+                reg_loss = bregman
 
-            # #     elif self.task == "fdiv_estimation":
-            # #         pass     
-            # #         # MINE loss
-            # #         # joint_expectation = logr1.mean(dim=0)   
-            # #         # marginal_expectation = torch.log(torch.mean(torch.exp(logr0), dim=0))         
-            # #         # mine_loss = - (joint_expectation - marginal_expectation)
-            # #         # loss += weight * mine_loss 
-            
-            # # # loss = loss + reg_loss #/ self.K 
-            
-            loss = loss + reg_loss
-
-            score_model.set_fk()
-            score_model.Pk.set_cached_sigma()
-            return {'loss': loss.mean(), 'nll': nll.mean()}
-        
-        else:
-            return {'loss': loss.mean(), 'nll': nll.mean()}
+        loss = loss + reg_loss
+        return {'loss': loss.mean(), 'nll': nll.mean()}
     
     def sparsity_condition(self, sigma):
         # l1 and l2, elastic regularization

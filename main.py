@@ -235,6 +235,9 @@ def train_fdiv_estimation(args):
     
     model_module_name = SUBTASK_MODLE_MODULES[args.subtask]
     
+    # Initialize checkpoint_callback (may be set by subtask-specific code)
+    checkpoint_callback = None
+    
     if args.test_only:
         setup_test_environment(datamodule, args, save_path)
         
@@ -295,13 +298,30 @@ def train_fdiv_estimation(args):
         accumulate_grad_batches = 5
 
     elif args.subtask == "ood_detection":
-        callbacks = [txt_logger_callback]
+        early_stopping_callback = EarlyStopping(
+            monitor="val_near_auroc", 
+            mode="max", 
+            verbose=True, 
+            patience=args.early_stopping
+        )
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=checkpoint_dir, 
+            filename="best_ckpt", 
+            monitor="val_near_auroc",
+            mode="max", 
+            save_top_k=1, 
+            save_last=True,
+        )
+        txt_logger_callback.early_stopping_callback = early_stopping_callback
+        callbacks = [checkpoint_callback, early_stopping_callback, txt_logger_callback]
         end_test = True
     else:
         raise ValueError(f"Invalid subtask {args.subtask}")
 
     # Fixed device configuration
     accelerator, devices = get_trainer_config(args)
+    # Enable checkpointing only if ModelCheckpoint callback is used
+    enable_checkpointing = checkpoint_callback is not None
     trainer = pl.Trainer(
         accelerator=accelerator,
         devices=devices,
@@ -309,7 +329,7 @@ def train_fdiv_estimation(args):
         default_root_dir=save_path,
         logger=logger_utils.NullLogger(),  # Optionally add logger for TensorBoard : pl.loggers.TensorBoardLogger("./")
         check_val_every_n_epoch=args.eval_freq,
-        enable_checkpointing=False,
+        enable_checkpointing=enable_checkpointing,
         callbacks=callbacks,
         enable_progress_bar=enable_progress_bar, 
         num_sanity_val_steps=0,   # -1: all val datasets; 0: no pre test
@@ -334,6 +354,17 @@ def train_fdiv_estimation(args):
         
         # Evaluate last saved model
         trainer.test(pl_model, datamodule=datamodule)
+        
+        # Evaluate best model if checkpoint_callback exists and has a best model
+        if checkpoint_callback and checkpoint_callback.best_model_path:
+            best_model = model_module_name.load_from_checkpoint(
+                checkpoint_callback.best_model_path, 
+                strict=False, 
+                map_location=args.device, 
+                args=args, 
+                datamodule=datamodule
+            )
+            trainer.test(best_model, datamodule=datamodule)
 
 if __name__ == "__main__":
     args = parse_args()
