@@ -95,6 +95,8 @@ def get_common_args(parser):
     parser.add_argument("--auxiliary_loss", action='store_false', default=True)
     parser.add_argument("--auxiliary_quad_steps", type=int, default=5,
                         help="Quadrature steps for log r(x) in auxiliary Bregman loss (non-decomp); kept small for training.")
+    parser.add_argument("--bregman_weight", type=float, default=1.0,
+                        help="Weight (coefficient) in front of the auxiliary Bregman loss; use for ablation (default 1.0).")
     parser.add_argument("--bregman_type", type=str, default="logistic")
     parser.add_argument("--shape_type", type=str, default="uniform")
     
@@ -175,7 +177,7 @@ def get_fdiv_args(parser):
     parser.add_argument('--ood_use_imglist', type=eval, default=False, choices=[True, False], help='Use imglist-based OOD data under data_dir (see pl_data/ood_detection.py); only cifar10/cifar100 supported in imglist mode')
     parser.add_argument('--ood_base_type', type=str, default='universal', choices=['local', 'general', 'universal'], help='Base distribution type for OOD detection (built-in mode only)')
     parser.add_argument('--ood_crop_size', type=int, default=12, help='Crop size for local OOD detection')
-    parser.add_argument('--ood_train', type=str, default=None, help='Override OOD training source for imglist mode: "selfgen" (q from ID transforms), "random", or path; default uses benchmark config')
+    parser.add_argument('--ood_train', type=str, default="random", help='Override OOD training source for imglist mode: "selfgen" (q from ID transforms), "random", or path; default uses benchmark config')
  
     # Image backbone (ResNet or WideResNet for all image-related tasks)
     parser.add_argument('--image_backbone', type=str, default='unet', choices=['unet', 'resnet18', 'resnet34', 'resnet50', 'wideresnet28_10'], help='Backbone network for image-based tasks (OOD detection, real images, etc.)')
@@ -380,13 +382,15 @@ def get_save_path(args):
     
     if args.sub_method == "score":
         if args.bridge:
-            key_args.extend(["bridge", str(args.gamma_t)])
+            key_args.extend(["bridge" + str(args.gamma_t)])
+        
+        key_args.extend([args.t_mode])
     
         if args.decomp:
             shape_type = None if args.shape_type == "uniform" else args.shape_type
             key_args.extend([shape_type, args.polynomials, args.noise_type, "K"+str(args.K_decomp)])
         elif args.SAI:
-            key_args.extend([args.t_mode, f"ratio{args.aligned_ratio}"])
+            key_args.extend([f"ratio{args.aligned_ratio}"])
     
         if args.condition:
             key_args.extend(["cond"])
@@ -394,6 +398,9 @@ def get_save_path(args):
             key_args.extend(["OT"])
         if args.path_type == "mvp":
             key_args.extend([args.constraint_type, f"K_{args.K_gmm}"])
+        # Bregman auxiliary loss weight (for ablation)
+        # bw = getattr(args, "bregman_weight", 1.0)
+        # key_args.extend([f"bregman_w{bw}"])
         key_args.extend([loss_type])
     key_args.extend([f"seed{args.seed}"])
     

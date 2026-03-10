@@ -300,30 +300,54 @@ class DensityRatioEstimationModel(pl.LightningModule):
             )
         elif self.args.sub_method == "score":
             if self.decomp:
-                return base_models.ImageDecompJointScoreModelResNet(
-                    args=self.args,
-                    in_channels=in_channels,
-                    hidden_channels=hidden_channels,
-                    embed_dim=self.args.embed_dim,
-                    K=self.args.K_decomp,
-                    polynomials=self.args.polynomials,
-                    noise_type=self.args.noise_type,
-                    backbone=image_backbone,
-                    dropout=image_dropout,
-                    nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
-                    path=self.path,
-                )
+                if image_backbone == "unet":
+                    return base_models.ImageDecompJointScoreModel(
+                        args=self.args,
+                        in_channels=in_channels,
+                        hidden_channels=hidden_channels,
+                        embed_dim=self.args.embed_dim,
+                        K=self.args.K_decomp,
+                        polynomials=self.args.polynomials,
+                        noise_type=self.args.noise_type,
+                        path=self.path,
+                    )
+                else:
+                    return base_models.ImageDecompJointScoreModelResNet(
+                        args=self.args,
+                        in_channels=in_channels,
+                        hidden_channels=hidden_channels,
+                        embed_dim=self.args.embed_dim,
+                        K=self.args.K_decomp,
+                        polynomials=self.args.polynomials,
+                        noise_type=self.args.noise_type,
+                        backbone=image_backbone,
+                        dropout=image_dropout,
+                        nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
+                        path=self.path,
+                    )
             else:
-                return base_models.ImageJointScoreModel(
-                    args=self.args,
-                    in_channels=in_channels,
-                    hidden_channels=hidden_channels,
-                    embed_dim=self.args.embed_dim,
-                    backbone=image_backbone,
-                    dropout=image_dropout,
-                    nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
-                    path=self.path,
-                )
+                if image_backbone == "unet":
+                    return base_models.ImageJointScoreModel(
+                        args=self.args,
+                        in_channels=in_channels,
+                        hidden_channels=hidden_channels,
+                        embed_dim=self.args.embed_dim,
+                        backbone=image_backbone,
+                        dropout=image_dropout,
+                        nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
+                        path=self.path,
+                    )
+                else:
+                    return base_models.ImageJointScoreModelResNet(
+                        args=self.args,
+                        in_channels=in_channels,
+                        hidden_channels=hidden_channels,
+                        embed_dim=self.args.embed_dim,
+                        backbone=image_backbone,
+                        dropout=image_dropout,
+                        nonlinearity=getattr(self.args, "nonlinearity", "leakyrelu"),
+                        path=self.path,
+                    )
         else:
             hidden_dims = list(map(int, self.args.dims.split("-")))
             return base_models.KernelDensityRatioModel(
@@ -514,11 +538,12 @@ class DensityRatioEstimationModel(pl.LightningModule):
         if self.args.sub_method == "kernel":
             self.automatic_optimization = False
             return []
-        if self.args.path_type == "mvp":
-            optimizer = optim.AdamW([
-                {"params": self.model.parameters(), "lr": self.args.lr, "weight_decay": 1e-5},
-                {"params": self.train_step_fn.parameters(), "lr": self.args.lr, "weight_decay": 0},
-            ])
-        else:
-            optimizer = optim.AdamW(self.model.parameters(), lr=self.args.lr, weight_decay=1e-5)
+        optimizer = optim.AdamW(self.model.parameters(), lr=self.args.lr, weight_decay=1e-5)
+        # if self.args.path_type == "mvp":
+        #     optimizer = optim.AdamW([
+        #         {"params": self.model.parameters(), "lr": self.args.lr, "weight_decay": 1e-5},
+        #         {"params": self.train_step_fn.parameters(), "lr": self.args.lr, "weight_decay": 0},
+        #     ])
+        # else:
+        #     optimizer = optim.AdamW(self.model.parameters(), lr=self.args.lr, weight_decay=1e-5)
         return optimizer

@@ -114,6 +114,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
         self.decomp = getattr(args, "decomp", False)
         self.K = args.K_decomp
         self.auxiliary_loss = args.auxiliary_loss
+        self.bregman_weight = getattr(args, "bregman_weight", 1.0)
         self.bregman_type = args.bregman_type
         self.clip_tau = torch.tensor(args.clip_tau)
         self._auxiliary_quad_steps = getattr(args, "auxiliary_quad_steps", 5)
@@ -494,17 +495,15 @@ class ScoreMatchingTrainStepFn(nn.Module):
         reg_loss = 0.0
 
         if decomp:
-            base_weight = 1. / self.K
             fk_xt = all_loss_terms["fk_xt"]
-            if hasattr(score_model, "set_fk"):
-                score_model.set_fk()
+            score_model.set_fk()
             if hasattr(score_model, "Pk") and score_model.Pk is not None:
                 score_model.Pk.set_cached_sigma()
 
         # Auxiliary Bregman loss: decomp uses compute_weighted_sum; non-decomp uses int s_t(t,x) dt (differentiable)
         if self.auxiliary_loss:
             logr0, logr1 = None, None
-            if hasattr(score_model, "compute_weighted_sum"):
+            if decomp:
                 logr0 = score_model.compute_weighted_sum(x0)
                 logr1 = score_model.compute_weighted_sum(x1)
             elif self._nondecomp_log_ratio_fn is not None:
@@ -516,7 +515,7 @@ class ScoreMatchingTrainStepFn(nn.Module):
                 )
             if logr0 is not None and logr1 is not None:
                 bregman = self.bregman_div_loss(logr0, logr1, bregman_type=self.bregman_type)
-                reg_loss = bregman
+                reg_loss = self.bregman_weight * bregman
 
         loss = loss + reg_loss
         return {'loss': loss.mean(), 'nll': nll.mean()}
