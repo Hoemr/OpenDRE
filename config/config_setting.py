@@ -222,13 +222,20 @@ def parse_args():
     args.path_type = "mvp" if args.mvp else args.path_type
     args.mvp = True if args.path_type == "mvp" else args.mvp
 
-    if args.subsub_method == "d3re":
-        args.bridge = True
-    if args.subsub_method == "osdre":
-        args.decomp = True
     if args.decomp:
         args.sub_method = "score"
         args.subsub_method == "osdre"
+
+    if args.subsub_method == "dre_infty":
+        args.sub_method = "score"
+        args.bridge = False
+        args.decomp = False
+    elif args.subsub_method == "d3re":
+        args.sub_method = "score"
+        args.bridge = True
+    elif args.subsub_method == "osdre":
+        args.sub_method = "score"
+        args.decomp = True
     
     # ISA
     if args.subsub_method == "isadre":

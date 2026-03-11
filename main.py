@@ -315,6 +315,7 @@ def train_fdiv_estimation(args):
         txt_logger_callback.early_stopping_callback = early_stopping_callback
         callbacks = [checkpoint_callback, early_stopping_callback, txt_logger_callback]
         end_test = True
+        # precision = "16-mixed"
     else:
         raise ValueError(f"Invalid subtask {args.subtask}")
 
