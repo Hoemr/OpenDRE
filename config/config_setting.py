@@ -295,8 +295,8 @@ def parse_args():
             args.d = ds_dict[args.data]
     
     elif args.task == "fdiv_estimation":
-        args.num_data_head = 3
-        args.num_time_head = 3
+        # args.num_data_head = 3
+        # args.num_time_head = 3
         args.d = ds_dict.get(args.data, args.d)
         
         if args.d < 100:

@@ -25,6 +25,26 @@ from layers.activations import (
 from layers.blocks import FusedConvBlock
 
 
+class UNetDataHead(nn.Module):
+    """Data head for UNet-based models with optional time conditioning.
+
+    This module supports multiple FusedConvBlock layers that can condition on
+    time embedding, followed by a final 1x1 convolution.
+    """
+
+    def __init__(self, in_channels, out_channels, embed_dim=None, num_layers=1, num_groups=8):
+        super().__init__()
+        self.layers = nn.ModuleList()
+        for _ in range(num_layers - 1):
+            self.layers.append(FusedConvBlock(in_channels, in_channels, embed_dim=embed_dim, num_groups=num_groups))
+        self.final_conv = nn.Conv2d(in_channels, out_channels, 1)
+
+    def forward(self, x, t_emb=None):
+        for layer in self.layers:
+            x = layer(x, t_emb)
+        return self.final_conv(x)
+
+
 class _BaseImageModel(nn.Module):
     """Shared utilities for image models (EDM preconditioning, init, etc.)."""
 
@@ -246,6 +266,44 @@ class _BaseImageTimeDependentModel(_BaseImageModel):
         ]
         return nn.Sequential(*layers)
 
+    def _build_unet_time_head_joint(self, num_time_head):
+        """Build time head for UNet-based joint models (outputs scalar)."""
+        layers = []
+        ch = self.hidden_channels[-1]
+        conv_kwargs = {
+            "in_channels": ch,
+            "out_channels": ch,
+            "kernel_size": 3,
+            "padding": 1,
+            "bias": False,
+        }
+        for _ in range(num_time_head - 1):
+            layers += [ConvNormSilu(nn.Conv2d, num_groups=8, **conv_kwargs)]
+
+        layers += [
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(ch, 1),
+        ]
+        return nn.Sequential(*layers)
+
+    def _build_unet_data_head(self, in_channels, num_data_head, embed_dim=None):
+        """Build data head for UNet-based models.
+
+        Args:
+            in_channels: Output channels (same as input image channels)
+            num_data_head: Number of data head layers
+            embed_dim: If provided, data head layers will condition on time embedding
+        """
+        ch = self.hidden_channels[0]
+        return UNetDataHead(
+            in_channels=ch,
+            out_channels=in_channels,
+            embed_dim=embed_dim,
+            num_layers=num_data_head,
+            num_groups=8,
+        )
+
     def _forward_unet_time_dependent(self, t, x, cond=None, joint=True):
         """Forward pass for UNet-based time-dependent models."""
         self.nfe += 1
@@ -286,7 +344,7 @@ class _BaseImageTimeDependentModel(_BaseImageModel):
                 enc_feat = dec_block["adapt_conv"](enc_feat)
                 x = torch.cat([x, enc_feat], dim=1)
                 x = dec_block["merge_conv"](x, t_emb)
-            s_x = self.out_sx(x)
+            s_x = self.out_sx(x, t_emb)
             return s_x, s_t
         return s_t
 
@@ -459,10 +517,16 @@ class ImageJointScoreModel(_BaseImageTimeDependentModel):
                 embed_dim=embed_dim,
                 num_time_head=getattr(args, "num_time_head", 1),
             )
-            # joint_score: scalar time head
-            self.out_st = nn.Linear(hidden_channels[-1], 1)
+            # joint_score: scalar time head with configurable layers
+            self.out_st = self._build_unet_time_head_joint(
+                num_time_head=getattr(args, "num_time_head", 1),
+            )
             if self.joint:
-                self.out_sx = nn.Conv2d(hidden_channels[0], in_channels, 1)
+                self.out_sx = self._build_unet_data_head(
+                    in_channels=in_channels,
+                    num_data_head=getattr(args, "num_data_head", 1),
+                    embed_dim=embed_dim,
+                )
         else:
             # For now, we keep non-UNet joint models in the ResNet-specific class.
             raise ValueError("Use ImageJointScoreModelResNet for ResNet/WideResNet.")
@@ -479,8 +543,8 @@ class ImageJointScoreModel(_BaseImageTimeDependentModel):
         self._initialize_weights()
 
     def _compute_s_t_unet(self, t, features, t_emb):
-        """Same as UnifiedModel._compute_s_t_unet_joint."""
-        return self.out_st(features.mean(dim=(2, 3))).view(-1, 1)
+        """Compute time score using the built time head."""
+        return self.out_st(features).view(-1, 1)
 
     def _compute_s_t_resnet(self, t, features, t_emb):
         raise NotImplementedError("ResNet path is handled by ImageJointScoreModelResNet.")
@@ -533,7 +597,11 @@ class ImageDecompJointScoreModel(_BaseImageTimeDependentModel):
             num_time_head=getattr(args, "num_time_head", 1),
         )
         if self.joint:
-            self.out_sx = nn.Conv2d(hidden_channels[0], in_channels, 1)
+            self.out_sx = self._build_unet_data_head(
+                in_channels=in_channels,
+                num_data_head=getattr(args, "num_data_head", 1),
+                embed_dim=embed_dim,
+            )
 
         # f_k computation (copied from UnifiedModel._compute_fk_unet)
         self.compute_fk_impl = self._compute_fk_unet
