@@ -1,5 +1,6 @@
 osdre/
 results/
+!results/*.py
 **/.ipynb_checkpoints/
 __pycache__/
 *.py[cod]

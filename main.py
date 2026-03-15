@@ -161,6 +161,7 @@ def train_likelihood_estimation(args):
         mode="min", 
         save_top_k=1, 
         save_last=True,
+        enable_version_counter=False,  # Don't create -v1, -v2 versions
     )
     
     # Task-specific hyperparameters and callbacks
@@ -239,13 +240,43 @@ def train_fdiv_estimation(args):
     checkpoint_callback = None
     
     if args.test_only:
+        import glob
         setup_test_environment(datamodule, args, save_path)
         
-        # Load final model checkpoint (fixed name for f-div estimation tasks)
-        ckpt_name = "final_model.ckpt"
-        best_ckpt_path = os.path.join(checkpoint_dir, ckpt_name) 
+        # Find all best_ckpt*.ckpt files
+        best_pattern = os.path.join(checkpoint_dir, "best_ckpt*.ckpt")
+        best_candidates = sorted(glob.glob(best_pattern), key=os.path.getmtime, reverse=True)
+        
+        # Try each checkpoint and find the most compatible one
+        ckpt_path = None
+        for candidate in best_candidates:
+            # Quick check: load checkpoint and inspect key structure
+            try:
+                ckpt_data = torch.load(candidate, map_location='cpu', weights_only=False)
+                state_dict = ckpt_data.get('state_dict', {})
+                model_keys = [k[6:] for k in state_dict.keys() if k.startswith('model.')]
+                
+                # Check if time_head has the new structure (time_head.0.weight instead of time_head.0.layers.0.weight)
+                has_new_time_head = any('time_head.0.weight' in k for k in model_keys)
+                has_old_time_head = any('time_head.0.layers.0.weight' in k for k in model_keys)
+                
+                if has_new_time_head and not has_old_time_head:
+                    ckpt_path = candidate
+                    print(f"[Info] Using compatible checkpoint: {os.path.basename(ckpt_path)}")
+                    break
+            except Exception:
+                continue
+        
+        if ckpt_path is None:
+            if best_candidates:
+                ckpt_path = best_candidates[0]
+                print(f"[Warning] No fully compatible checkpoint found, using: {os.path.basename(ckpt_path)}")
+            else:
+                ckpt_path = os.path.join(checkpoint_dir, "final_model.ckpt")
+                print(f"[Warning] No best checkpoint found, falling back to {os.path.basename(ckpt_path)}")
+        
         best_model = model_module_name.load_from_checkpoint(
-            best_ckpt_path, 
+            ckpt_path, 
             strict=False, 
             map_location=args.device, 
             args=args, 
@@ -311,6 +342,7 @@ def train_fdiv_estimation(args):
             mode="max", 
             save_top_k=1, 
             save_last=True,
+            enable_version_counter=False,  # Don't create -v1, -v2 versions
         )
         txt_logger_callback.early_stopping_callback = early_stopping_callback
         callbacks = [checkpoint_callback, early_stopping_callback, txt_logger_callback]

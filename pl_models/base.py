@@ -212,6 +212,22 @@ class DensityRatioEstimationModel(pl.LightningModule):
         self.metrics_dir = os.path.join(save_path, "metrics")
         self.sample_path = os.path.join(save_path, "samples")
         os.makedirs(self.fdiv_path, exist_ok=True)
+
+    def on_load_checkpoint(self, checkpoint):
+        """Ensure model weights are correctly loaded from checkpoint.
+        
+        The checkpoint's state_dict has keys prefixed with 'model.', which need to be
+        loaded into self.model (not self). This method strips the 'model.' prefix and
+        loads the weights into the model.
+        """
+        state_dict = checkpoint.get("state_dict", {})
+        # Filter and strip 'model.' prefix for loading into self.model
+        model_state = {}
+        for k, v in state_dict.items():
+            if k.startswith("model."):
+                model_state[k[6:]] = v  # Remove 'model.' prefix
+        if model_state:
+            self.model.load_state_dict(model_state, strict=False)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         os.makedirs(self.metrics_dir, exist_ok=True)
         os.makedirs(self.sample_path, exist_ok=True)

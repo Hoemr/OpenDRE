@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
+import os
+import time
 import numpy as np
 import torch
 from sklearn.metrics import roc_auc_score, average_precision_score
@@ -119,19 +121,53 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         prefix = "val" if stage == "val" else "test"
 
         id_loader = DataLoader(id_dataset, batch_size=batch_size, shuffle=False)
-        id_scores = self._compute_scores_for_loader(id_loader)
+        eval_time_sec = None
+        score_time_sec = 0.0
 
-        # Collect metrics per OOD dataset
+        # Compute ID scores (timed for both val and test)
+        t0 = time.perf_counter()
+        id_scores = self._compute_scores_for_loader(id_loader)
+        score_time_sec += time.perf_counter() - t0
+
+        # Collect metrics and scores per OOD dataset
         all_metrics = {"auroc": [], "fpr95": [], "aupr_in": [], "aupr_out": [], "acc": []}
+        all_ood_scores = {}
         for ood_name, ood_ds in zip(ood_names, ood_datasets):
             ood_loader = DataLoader(ood_ds, batch_size=batch_size, shuffle=False)
+            t1 = time.perf_counter()
             ood_scores = self._compute_scores_for_loader(ood_loader)
+            score_time_sec += time.perf_counter() - t1
+            all_ood_scores[ood_name] = ood_scores
             labels = np.concatenate([np.ones(len(id_scores)), np.zeros(len(ood_scores))])
             scores = np.concatenate([id_scores, ood_scores])
             m = _ood_metrics(labels, scores)
             for key, val in m.items():
                 self.log(f"{prefix}_{key}_{ood_name}", val, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
                 all_metrics[key].append(val if not np.isnan(val) else None)
+
+        # Log inference time as a metric (ID + all OOD scores)
+        eval_time_sec = score_time_sec
+        self.log(
+            f"{prefix}_time",
+            eval_time_sec,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+            logger=True,
+            sync_dist=True,
+        )
+
+        # Save raw scores for further analysis (per run, per stage)
+        try:
+            metrics_dir = self.metrics_dir
+            os.makedirs(metrics_dir, exist_ok=True)
+            save_dict = {"id": id_scores}
+            for ood_name, ood_scores in all_ood_scores.items():
+                save_dict[f"ood_{ood_name}"] = ood_scores
+            np.savez_compressed(os.path.join(metrics_dir, f"{stage}_scores.npz"), **save_dict)
+        except Exception as e:
+            # Do not break training/eval if saving fails, but surface the error once
+            print(f"[Warning] Failed to save OOD scores to metrics/{stage}_scores.npz: {e}")
 
         # Compute mean metrics
         mean_metrics = {}
@@ -145,8 +181,16 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
         name_to_auroc = {n: a for n, a in zip(ood_names, all_metrics["auroc"]) if a is not None}
         near_auroc, far_auroc = self._compute_near_far_auroc(name_to_auroc, prefix)
 
-        # Log to txt file
-        self._log_ood_to_txt(mean_metrics, ood_names, all_metrics["auroc"], near_auroc, far_auroc, is_val=(stage == "val"))
+        # Log to txt file (include eval time for both val and test stages)
+        self._log_ood_to_txt(
+            mean_metrics,
+            ood_names,
+            all_metrics["auroc"],
+            near_auroc,
+            far_auroc,
+            is_val=(stage == "val"),
+            eval_time_sec=eval_time_sec,
+        )
 
     def _compute_near_far_auroc(self, name_to_auroc, prefix):
         """Compute and log near/far AUROC averages."""
@@ -163,7 +207,7 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
                 self.log(f"{prefix}_far_auroc", far_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         return near_auroc, far_auroc
 
-    def _log_ood_to_txt(self, mean_metrics, ood_names, all_aurocs, near_auroc, far_auroc, is_val=True):
+    def _log_ood_to_txt(self, mean_metrics, ood_names, all_aurocs, near_auroc, far_auroc, is_val=True, eval_time_sec=None):
         """Write OOD metrics to training_logger. Group by near-OOD / far-OOD when using imglist."""
         if not (self.trainer and self.trainer.is_global_zero):
             return
@@ -206,6 +250,13 @@ class OutOfDistributionDetectionModel(DensityRatioEstimationModel):
             for name, auroc in zip(ood_names, all_aurocs):
                 if auroc is not None:
                     parts.append(f"{name} {auroc:.4f}")
+
+        # Append inference time (seconds)
+        if eval_time_sec is not None:
+            if is_val:
+                parts.append(f"val_time {eval_time_sec:.2f}s")
+            else:
+                parts.append(f"test_time {eval_time_sec:.2f}s")
 
         log.info(" | ".join(parts))
 
