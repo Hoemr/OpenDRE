@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import math
 
 from core.utils import divergence_approx, jacobian_frobenius_divergence_approx
-from estimators.estimators import secant_to_tangent, get_density_ratio_fn
+from dre.estimators import secant_to_tangent, get_density_ratio_fn
 
 
 class TimeSampler(nn.Module):

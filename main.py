@@ -13,7 +13,7 @@ from pl_models import SUBTASK_MODLE_MODULES
 
 from config import parse_args, get_save_path
 from core.utils import set_random_seeds, makedirs
-import logger.logger as logger_utils
+import core.logger as logger_utils
 
 import warnings
 warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument.*")

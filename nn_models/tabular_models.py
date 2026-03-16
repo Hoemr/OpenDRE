@@ -13,9 +13,9 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
-import layers.layers as Layers
-import polynomials.polynomials as Pk
-from layers.activations import NONLINEARITIES, INIT_METHODS, ACTIVATION_TYPE_MAP
+import nn_models.layers.layers as Layers
+import dre.polynomials as Pk
+from nn_models.layers.activations import NONLINEARITIES, INIT_METHODS, ACTIVATION_TYPE_MAP
 
 
 class _BaseTabularModel(nn.Module):

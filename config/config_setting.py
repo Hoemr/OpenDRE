@@ -2,12 +2,12 @@
 import argparse
 import torch
 
-from layers.activations import NONLINEARITIES
-import polynomials.polynomials as Pk
+from nn_models.layers.activations import NONLINEARITIES
+import dre.polynomials as Pk
 
 import pl_data
 from pl_data import REAL_IMAGE_DATASETS, TABULAR_DATASETS, SYNTHETIC2D_DATASETS
-from estimators import SOLVER_DICT, QUAD_DICT, SOLVER_DICT_SCIPY
+from dre.estimators import SOLVER_DICT, QUAD_DICT, SOLVER_DICT_SCIPY
 
 SOLVERS = [*SOLVER_DICT_SCIPY.keys(), *SOLVER_DICT.keys(), *QUAD_DICT.keys()]
 SUB_METHODS = ["score", "neural", "kernel"]
@@ -65,7 +65,7 @@ def get_common_args(parser):
     # bridge model
     parser.add_argument("--bridge", action='store_true', default=False)
     parser.add_argument("--OT", action='store_true', default=False)
-    parser.add_argument('--sample_noise_std', type=float, default=1e-5, help='Std of additive Gaussian noise for sample perturbation')
+    parser.add_argument('--sample_noise_std', type=float, default=0.005, help='Std of additive Gaussian noise for sample perturbation')
     parser.add_argument('--gamma_t', type=float, default=0.01)
 
     # EDM-style input preconditioning (path-aware total scale)
@@ -173,8 +173,8 @@ def get_fdiv_args(parser):
     parser.add_argument('--use_simplex', type=eval, default=False, choices=[True, False], help='Use simplex instead of Gaussian noise for CPD')
     
     # OOD detection
-    parser.add_argument('--ood_in_dist', type=str, default='mnist', choices=['mnist', 'fashion_mnist', 'cifar10', 'cifar100'], help='In-distribution dataset for OOD detection')
-    parser.add_argument('--ood_use_imglist', type=eval, default=False, choices=[True, False], help='Use imglist-based OOD data under data_dir (see pl_data/ood_detection.py); only cifar10/cifar100 supported in imglist mode')
+    parser.add_argument('--ood_in_dist', type=str, default='cifar10', choices=['mnist', 'fashion_mnist', 'cifar10', 'cifar100'], help='In-distribution dataset for OOD detection')
+    parser.add_argument('--ood_use_imglist', type=eval, default=True, choices=[True, False], help='Use imglist-based OOD data under data_dir (see pl_data/ood_detection.py); only cifar10/cifar100 supported in imglist mode')
     parser.add_argument('--ood_base_type', type=str, default='universal', choices=['local', 'general', 'universal'], help='Base distribution type for OOD detection (built-in mode only)')
     parser.add_argument('--ood_crop_size', type=int, default=12, help='Crop size for local OOD detection')
     parser.add_argument('--ood_train', type=str, default="random", help='Override OOD training source for imglist mode: "selfgen" (q from ID transforms), "random", or path; default uses benchmark config')
@@ -291,7 +291,7 @@ def parse_args():
         elif args.subtask == "real_image":
             # python main.py likelihood_estimation --subtask real_image --data mnist --method dre --decomp --K_decomp 1000 --gpu_id 0
             args = set_image_args(args)
-            args.early_stopping = 60 
+            args.early_stopping = 30 
             args.d = ds_dict[args.data]
     
     elif args.task == "fdiv_estimation":

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import numpy as np
 import nn_models as base_models
-from path import ImageInterpXt
-import losses.losses as train_step_fns
+from dre.path import ImageInterpXt
+import dre.losses.losses as train_step_fns
 from .base import DensityRatioEstimationModel
 
 class MIRealDataModel(DensityRatioEstimationModel):

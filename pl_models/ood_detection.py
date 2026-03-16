@@ -6,10 +6,10 @@ import numpy as np
 import torch
 from sklearn.metrics import roc_auc_score, average_precision_score
 from torch.utils.data import DataLoader
-from path import ImageInterpXt
+from dre.path import ImageInterpXt
 from pl_data import OOD_EVAL_CONFIG, OOD_IMGLIST_NEAR_FAR
 from .base import DensityRatioEstimationModel
-import visualization.visualization as vis_utils
+import core.visualization as vis_utils
 
 _TRAIN_LOGGER_NAME = "training_logger"
 

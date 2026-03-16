@@ -5,7 +5,7 @@ from torchdiffeq import odeint_adjoint as odeint
 
 from core.utils import _flip
 from .tabular_models import JointScoreModel
-from layers.blocks import ODEfunc
+from nn_models.layers.blocks import ODEfunc
 
 
 class cnf_net(torch.nn.Module):

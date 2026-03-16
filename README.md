@@ -51,20 +51,20 @@ The codebase is split into top-level packages for easier navigation:
 
 | Package | Contents |
 |---------|----------|
-| `nn_models/` | Neural network models (`tabular_models`, `image_models`, legacy `UnifiedModel` wrapper) |
-| `layers/` | Building blocks: custom layers (`layers.py`), activations (`activations.py`) |
+| `nn_models/` | Neural network models (`tabular_models`, `image_models`, legacy `UnifiedModel` wrapper, plus logical `layers` / `nsf` modules) |
+| `layers/` | (Legacy) custom layers and activations; now re-exported via `nn_models.activations` / `nn_models.layers_core` / `nn_models.blocks` |
 | `polynomials/` | Polynomial basis (e.g. for score decomposition) |
 | `pl_data/` | Lightning DataModules and dataset configs |
 | `losses/` | Training objectives (score matching, kernel/neural DRE) |
 | `estimators/` | Likelihood / density-ratio estimators, quadrature, metrics |
 | `path/` | Path (ODE/SDE) and Bayesian path (path_base.py, bayesian_path.py) |
 | `pl_models/` | Lightning modules per task |
-| `nsf/` | NSF flows (optional submodule) |
+| `nsf/` | (Legacy) NSF flows; now re-exported under `nn_models.nsf` |
 | `config/` | Argument parsing and save paths |
 | `logger/` | Logging utilities |
-| `sampling/` | Sampling routines |
-| `visualization/` | Plotting and visualization |
-| `core/` | Project helpers (utils.py, data_utils.py, tabular/). Named `core` to avoid shadowing torchquad's `utils`. |
+| `sampling/` | (Deprecated) old sampling entry; functionality lives in `core/sampling.py` |
+| `visualization/` | (Deprecated) old plotting entry; functionality lives in `core/visualization.py` |
+| `core/` | Project helpers (utils.py, data_utils.py, tabular/), sampling routines, plotting/visualization, and helper scripts (e.g. `download_ood_benchmark.py`). Named `core` to avoid shadowing torchquad's `utils`. |
 
 Import examples: `from pl_data import SUBTASK_DATA_MODULES`, `from nn_models import JointScoreModel`, `from config import parse_args`, `from path import ToyInterpXt`.
 
@@ -128,7 +128,7 @@ Imglist mode uses **list files** (one line per `image_path label`) and matches t
 1. **Option A (recommended):** From OS_DRE repo, run our script (uses same OpenOOD Google Drive IDs):
    ```bash
    pip install gdown
-   python scripts/download_ood_benchmark.py --save_dir ../data
+   python core/download_ood_benchmark.py --save_dir ../data
    ```
    This creates `../data/benchmark_imglist/` (all txt lists) and `../data/images_classic/{cifar10,cifar100,tin,mnist,svhn}/`. Then set `--data_dir ../data`.
 
@@ -405,7 +405,7 @@ OS_DRE/
 ├── config/           # Argument parsing (e.g. config_setting.py)
 ├── pl_data/          # DataModules and dataset configs
 ├── pl_models/        # Lightning modules per task
-├── nn_models/        # Model architectures (tabular_models, image_models, legacy UnifiedModel wrapper)
+├── nn_models/        # Model architectures (tabular_models, image_models, legacy UnifiedModel wrapper, layers aliases, nsf namespace)
 ├── path/             # Path (ODE/SDE), Bayesian path
 ├── losses/           # Score matching, kernel/neural DRE losses
 ├── estimators/       # Likelihood and density-ratio estimators

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Density estimation: 2D synthetic."""
 import time
-import visualization.visualization as vis_utils
+import core.visualization as vis_utils
 from .base import DensityEstimationModel
 
 class DensityEstimation2DSyntheticModel(DensityEstimationModel):

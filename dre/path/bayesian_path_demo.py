@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 
-from path import bayesian_path
-from losses.score_matching import TimeSampler
+from dre.path import bayesian_path
+from dre.losses.score_matching import TimeSampler
 
 KMMBayesianTrajectory = bayesian_path.KMMBayesianTrajectory
 def stopgrad(x):

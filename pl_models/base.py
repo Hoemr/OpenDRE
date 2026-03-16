@@ -11,13 +11,13 @@ import torch.optim as optim
 import torchvision.utils as vutils
 from typing import Tuple
 
-from path import ToyInterpXt, ImageInterpXt
+from dre.path import ToyInterpXt, ImageInterpXt
 import nn_models as base_models
-from estimators import get_likelihood_fn, get_density_ratio_fn, MetricEvaluator
-import losses.losses as train_step_fns
+from dre.estimators import get_likelihood_fn, get_density_ratio_fn, MetricEvaluator
+import dre.losses.losses as train_step_fns
 from pl_data import SPECS, DATA_SHAPES
-import visualization.visualization as vis_utils
-from sampling import sampling
+import core.visualization as vis_utils
+from core.sampling import sampling
 
 def make_mixture_mb(px, qx, beta: float):
     """

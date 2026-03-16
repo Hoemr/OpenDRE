@@ -11,11 +11,11 @@ import torch.optim as optim
 import torchvision.utils as vutils
 
 import nn_models as base_models
-import losses.losses as train_step_fns
+import dre.losses.losses as train_step_fns
 from pl_data import DATA_SHAPES, SPECS
-from path import ImageInterpXt
-import visualization.visualization as vis_utils
-from sampling import sampling
+from dre.path import ImageInterpXt
+import core.visualization as vis_utils
+from core.sampling import sampling
 
 from .base import DensityEstimationModel
 
@@ -56,8 +56,8 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
         self.flow_fn = flow_fn
 
     def load_pretrained_flow_model(self):
-        from nsf.experiments.images_noise import create_transform
-        from nsf.nde import distributions, transforms, flows
+        from nn_models.nsf.experiments.images_noise import create_transform
+        from nn_models.nsf.nde import distributions, transforms, flows
 
         with open(os.path.join("nsf", "flow_ckpts", "test_data_stats.p"), "rb") as fp:
             data_stats = pickle.load(fp)

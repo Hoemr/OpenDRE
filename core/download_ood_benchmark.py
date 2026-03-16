@@ -5,13 +5,14 @@ Download OpenOOD-style benchmark data (benchmark_imglist + images_classic) for i
 Uses the same Google Drive IDs as OpenOOD. Run from repo root:
 
   pip install gdown
-  python scripts/download_ood_benchmark.py --save_dir ../data
+  python core/download_ood_benchmark.py --save_dir ../data
 
 Then: --data_dir ../data --ood_use_imglist True --ood_in_dist cifar10
 """
 import argparse
 import os
 import zipfile
+
 
 def main():
     try:
@@ -33,9 +34,18 @@ def main():
     }
 
     ap = argparse.ArgumentParser(description="Download OpenOOD benchmark data for imglist OOD")
-    ap.add_argument("--save_dir", type=str, default="../data", help="Directory that will contain benchmark_imglist and images_classic")
-    ap.add_argument("--datasets", nargs="+", default=["benchmark_imglist", "cifar10", "cifar100", "tin", "mnist", "svhn"],
-                    help="Which to download: benchmark_imglist (txt lists) and/or image sets")
+    ap.add_argument(
+        "--save_dir",
+        type=str,
+        default="../data",
+        help="Directory that will contain benchmark_imglist and images_classic",
+    )
+    ap.add_argument(
+        "--datasets",
+        nargs="+",
+        default=["benchmark_imglist", "cifar10", "cifar100", "tin", "mnist", "svhn"],
+        help="Which to download: benchmark_imglist (txt lists) and/or image sets",
+    )
     args = ap.parse_args()
 
     save_dir = os.path.abspath(args.save_dir)
@@ -77,5 +87,7 @@ def main():
 
     print("Done. Use: --data_dir %s --ood_use_imglist True --ood_in_dist cifar10" % save_dir)
 
+
 if __name__ == "__main__":
     main()
+

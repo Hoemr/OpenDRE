@@ -13,16 +13,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
 
-import layers.layers as Layers
-import polynomials.polynomials as Pk
+import nn_models.layers.layers as Layers
+import dre.polynomials as Pk
 from pl_data import DATA_SHAPES
-from layers.activations import (
+from nn_models.layers.activations import (
     NONLINEARITIES,
     INIT_METHODS,
     ACTIVATION_TYPE_MAP,
     ConvNormSilu,
 )
-from layers.blocks import FusedConvBlock
+from nn_models.layers.blocks import FusedConvBlock
 
 
 class UNetDataHead(nn.Module):
