@@ -16,14 +16,22 @@ from .base import DataModule
 
 REAL_IMAGE_DATASETS = ["mnist", "svhn", "cifar10", 'celeba', 'lsun_church', 'frey_face', "fashion_mnist"]
 SPECS = {
-    "mnist": (1, (0,), (1.,)),
-    "fashion_mnist": (1, (0,), (1.,)),
-    "frey_face": (1, (0.,), (1.,)),
-    "svhn": (3, (0., 0., 0.), (1., 1., 1.)),
-    "cifar10": (3, (0., 0., 0.), (1., 1., 1.)),
-    "celeba": (3, (0, 0., 0.), (1., 1., 1.)),
-    "lsun_church": (3, (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-}
+        # "mnist": (1, (0,), (1.,)),
+        # "fashion_mnist": (1, (0,), (1.,)),
+        # "frey_face": (1, (0.,), (1.,)),
+        # "svhn": (3, (0., 0., 0.), (1., 1., 1.)),
+        # "cifar10": (3, (0., 0., 0.), (1., 1., 1.)),
+        # "celeba": (3, (0, 0., 0.), (1., 1., 1.)),
+        
+        "mnist": (1, (0.1307,), (0.3081,)),
+        "fashion_mnist": (1, (0.2860,), (0.3530,)),
+        "frey_face": (1, (0.58,), (0.17,)),  
+        "svhn": (3, (0.4377, 0.4438, 0.4728), (0.1980, 0.2010, 0.1970)),
+        "cifar10": (3, (0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+        "celeba": (3, (0.5063, 0.4258, 0.3832), (0.3106, 0.2903, 0.2897)),
+        
+        "lsun_church": (3, (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    }
 DATA_SHAPES = {
     "mnist": (1, 28, 28),
     "fashion_mnist": (1, 28, 28),
@@ -66,7 +74,7 @@ class RealImageDataModule(DataModule):
         super().__init__(args)
         self.data_dir = args.data_dir
         self.layer_type = args.layer_type
-        self.noise_std = args.sample_noise_std
+        # 噪声仅在 pl_models 的 prepare_batch / training_step 中处理
         self.val_split = args.val_split
         if isinstance(args.gpu_id, list):
             num_gpus = len(args.gpu_id)
@@ -84,11 +92,11 @@ class RealImageDataModule(DataModule):
         return SPECS[self.data_type][0], transforms.Normalize(*SPECS[self.data_type][1:])
 
     def _build_base_transform(self):
-        transform_list = [transforms.Resize(self.data_shape[1:]), transforms.ToTensor()]
+        transform_list = [transforms.Resize(self.data_shape[1:])]
         if self.data_type == "frey_face":
             transform_list.insert(0, transforms.Lambda(lambda x: x.convert('L')))
-        if self.noise_std > 0:
-            transform_list.append(transforms.Lambda(lambda x: x + torch.randn_like(x) * self.noise_std))
+        transform_list.append(transforms.ToTensor())
+        transform_list.append(self.normalize)
         return transforms.Compose(transform_list)
 
     def _build_train_transform(self):

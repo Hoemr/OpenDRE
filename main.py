@@ -187,6 +187,7 @@ def train_likelihood_estimation(args):
         
     # Fixed device configuration with strategy support for multi-GPU
     accelerator, devices, strategy, sync_batchnorm = get_trainer_config(args, need_strategy=True)
+    enable_checkpointing = checkpoint_callback is not None
     trainer = pl.Trainer(
         accelerator=accelerator,
         devices=devices,
@@ -196,7 +197,7 @@ def train_likelihood_estimation(args):
         default_root_dir=save_path,
         logger=logger_utils.NullLogger(),  
         check_val_every_n_epoch=args.eval_freq,
-        enable_checkpointing=False,
+        enable_checkpointing=enable_checkpointing,
         callbacks=callbacks,
         enable_progress_bar=enable_progress_bar, 
         num_sanity_val_steps=-1,  # -1: validate on entire dataset; 0: skip pre-validation

@@ -3,7 +3,7 @@ import os
 import numpy as np
 import torch
 import torch.nn.functional as F
-import visualization.visualization as vis_utils
+import core.visualization as vis_utils
 from .base import DensityRatioEstimationModel
 
 class ChangePointDetectionModel(DensityRatioEstimationModel):

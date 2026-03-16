@@ -1,18 +1,17 @@
-# OpenDRE: A Unified Framework for Score-based Density Ratio Estimation
+# OpenDRE: A Unified Framework for Density Ratio Estimation
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-This repository provides a unified implementation of score-based density ratio estimation methods, integrating multiple state-of-the-art papers from top-tier machine learning venues (NeurIPS, ICML, ICLR). The framework supports likelihood estimation, f-divergence estimation, mutual information estimation, change point detection, and out-of-distribution (OOD) detection.
+This repository provides a unified implementation of density ratio estimation methods, integrating multiple state-of-the-art papers from top-tier machine learning venues (NeurIPS, ICML, ICLR). The framework supports likelihood estimation, f-divergence estimation, mutual information estimation, change point detection, and out-of-distribution (OOD) detection.
 
 ## Overview
 
 Score-based generative modeling has emerged as a powerful paradigm for learning complex probability distributions. This framework unifies multiple approaches:
 
-- **Score Matching Methods**: DRE∞, D3RE, OS-DRE, ISA-DRE
+- **Score-based Methods**: DRE-$\infty$, D$^3$RE, OS-DRE, ISA-DRE, MVP-DRE
 - **Kernel Methods**: Kernel Density Ratio Estimation
 - **Neural Methods**: KULSIF, NCE, InfoNCE, RKL, Hellinger, KL, Gamma, EW, PW
 - **Continuous Normalizing Flows**: ODE-based likelihood computation
-- **Image Backbones**: ResNet-18/34/50, WideResNet-28-10 for image-based tasks
 
 
 ### Key Features
@@ -51,7 +50,7 @@ The codebase is split into top-level packages for easier navigation:
 
 | Package | Contents |
 |---------|----------|
-| `nn_models/` | Neural network models (`tabular_models`, `image_models`, legacy `UnifiedModel` wrapper, plus logical `layers` / `nsf` modules) |
+| `nn_models/` | Neural network models (`tabular_models`, `image_models`, legacy `UnifiedModel` wrapper, plus logical `layers` modules) |
 | `pl_data/` | Lightning DataModules and dataset configs |
 | `pl_models/` | Lightning modules per task |
 | `dre/` | Core DRE components: paths (`dre/path`), losses (`dre/losses`), estimators (`dre/estimators.py`), polynomial bases (`dre/polynomials.py`) |
@@ -71,24 +70,159 @@ All experiments are run through `main.py` with subparsers for different tasks:
 python main.py likelihood_estimation --subtask synthetic2d --data checkerboard --method dre --decomp --K_decomp 400
 
 # Tabular density estimation
-python main.py likelihood_estimation --subtask tabular --data bsds300 --method dre --decomp --K_decomp 400 --batch_size 20000 --gpu_id 1
+python main.py likelihood_estimation --subtask tabular --data bsds300 --method dre --decomp --K_decomp 400 --batch_size 20000
 
 # Real image modeling
-python main.py likelihood_estimation --subtask real_image --data mnist --method dre --decomp --K_decomp 1000 --gpu_id 0
+python main.py likelihood_estimation --subtask real_image --data mnist --method dre --decomp --K_decomp 400
 
 # Distribution shift estimation
 python main.py fdiv_estimation --subtask distribution_shift --data gauss_shift --decomp --K_decomp 300 --shift_steps 5 --shift 0.05 --d 80
 
 # Mutual information estimation
-python main.py fdiv_estimation --subtask mutual_information --data diag_multi_gauss --decomp --K_decomp 1000 --epochs 40000 --d 160 --gpu_id 0
+python main.py fdiv_estimation --subtask mutual_information --data diag_multi_gauss --decomp --K_decomp 400 --epochs 40000 --d 160
 
 # Change point detection
 python main.py fdiv_estimation --subtask change_point_detection --data cpd_text --use_simplex True --cpd_swl 64
 
 # OOD detection (see "OOD detection" section below for tasks and parameters)
-python main.py fdiv_estimation --subtask ood_detection --sub_method neural --subsub_method nce --ood_use_imglist True --ood_in_dist cifar10 --image_backbone resnet18 --epochs 500 --batch_size 1024 --lr 0.1 --gpu_id 4 
-python main.py fdiv_estimation --subtask ood_detection --sub_method score --subsub_method d3re --condition True --joint False --ood_use_imglist True --ood_in_dist fashion_mnist --image_backbone resnet18 --epochs 500 --batch_size 1024 --lr 0.1 --gpu_id 8
+python main.py fdiv_estimation --subtask ood_detection --sub_method neural --subsub_method nce --ood_use_imglist True --ood_in_dist cifar10 --image_backbone resnet18
+python main.py fdiv_estimation --subtask ood_detection --sub_method score --subsub_method d3re --condition True --joint False --ood_use_imglist True --ood_in_dist fashion_mnist --image_backbone resnet18
 ```
+
+### Unified CLI pattern (shared across tasks)
+
+Most experiments follow the same high-level pattern:
+
+```bash
+python main.py <task> \
+  --subtask <subtask> \
+  --data <dataset> \
+  --method <dre|cnf> \
+  --sub_method <score|neural|kernel> \
+  --subsub_method <method_variant> \
+  [task-specific arguments...]
+```
+
+- **Common arguments**
+  - `--task` (implied by subparser): `likelihood_estimation` or `fdiv_estimation`
+  - `--subtask`: task-specific subtask (e.g. `synthetic2d`, `tabular`, `real_image`, `distribution_shift`, `mutual_information`, `change_point_detection`, `ood_detection`, `mi_realdata`)
+  - `--data`: dataset name (depends on subtask; see tables below)
+  - `--method`: high-level method family, currently `dre` (density ratio estimation) or `cnf` (continuous normalizing flows, for likelihood estimation)
+  - `--sub_method`: estimator type:
+    - `score`: score-based DRE (path-based models)
+    - `neural`: neural density-ratio estimators (e.g. NCE, InfoNCE, logistic, PW, χ²)
+    - `kernel`: kernel density-ratio estimators
+  - `--subsub_method`: specific method variant within the chosen `sub_method`:
+    - score-based: `dre_infty`, `d3re`, `osdre`, `isadre`
+    - neural: `kulsif`, `logistic`, `nce`, `infonce`, `rkl`, `hellinger`, `kl`, `gamma`, `ew`, `pw`, `chisq`
+    - kernel: currently no sub-variants
+
+#### Per-task method configuration (examples)
+
+- **Likelihood estimation (`task=likelihood_estimation`)**
+  - 2D synthetic (score-based vs neural vs kernel):
+    ```bash
+    # Score-based DRE (e.g., DRE∞)
+    python main.py likelihood_estimation \
+      --subtask synthetic2d \
+      --data checkerboard \
+      --method dre \
+      --sub_method score \
+      --subsub_method dre_infty \
+      --decomp --K_decomp 400
+
+    # Neural DRE (e.g., NCE)
+    python main.py likelihood_estimation \
+      --subtask synthetic2d \
+      --data checkerboard \
+      --method dre \
+      --sub_method neural \
+      --subsub_method nce
+
+    # Kernel DRE
+    python main.py likelihood_estimation \
+      --subtask synthetic2d \
+      --data checkerboard \
+      --method dre \
+      --sub_method kernel
+    ```
+  - Tabular / real image tasks share the same pattern; only `--subtask`, `--data`, and some optimization hyperparameters (e.g., `--batch_size`, `--epochs`) change.
+
+- **F-divergence estimation (`task=fdiv_estimation`)**
+  - Distribution shift, mutual information, change point detection:
+    ```bash
+    # Score-based DRE for distribution shift
+    python main.py fdiv_estimation \
+      --subtask distribution_shift \
+      --data gauss_shift \
+      --method dre \
+      --sub_method score \
+      --subsub_method osdre \
+      --decomp --K_decomp 300
+
+    # Neural DRE for mutual information
+    python main.py fdiv_estimation \
+      --subtask mutual_information \
+      --data diag_multi_gauss \
+      --method dre \
+      --sub_method neural \
+      --subsub_method nce \
+      --epochs 40000 --d 160
+    ```
+
+- **OOD detection (`task=fdiv_estimation`, `subtask=ood_detection`)**
+  - The OOD pipeline is the most involved; the recommended combinations (score vs neural methods, CIFAR-10 vs CIFAR-100, train vs test, multi-seed runs) are encoded in `dre_ood.sh`.
+  - Core patterns (per single run) are:
+    ```bash
+    # Neural OOD (e.g., NCE) with ResNet-18 backbone
+    python main.py fdiv_estimation \
+      --subtask ood_detection \
+      --method dre \
+      --sub_method neural \
+      --subsub_method nce \
+      --ood_use_imglist True \
+      --ood_in_dist cifar10 \
+      --image_backbone resnet18 \
+      --epochs 1000 \
+      --batch_size 768 \
+      --lr 0.001 \
+      --sample_noise_std 0.005 \
+      --ood_train random
+
+    # Score-based OOD (e.g., D3RE or OS-DRE) with UNet backbone
+    python main.py fdiv_estimation \
+      --subtask ood_detection \
+      --method dre \
+      --sub_method score \
+      --subsub_method d3re \  # or dre_infty, osdre
+      --ood_use_imglist True \
+      --ood_in_dist cifar10 \
+      --image_backbone unet \
+      --path_type trigonometric \
+      --t_mode lognorm \
+      --condition True \
+      --joint True \
+      --bridge 1 \
+      --epochs 1000 \
+      --batch_size 768 \
+      --lr 0.001 \
+      --sample_noise_std 0.005 \
+      --ood_train random
+    ```
+  - For large-scale, multi-GPU, multi-seed sweeps, use the provided launcher:
+    ```bash
+    # Test mode (single-GPU, timing-friendly)
+    bash dre_ood.sh test score cifar10 "0"
+
+    # Train all score-based methods on CIFAR-10 and CIFAR-100, multiple GPUs and seeds
+    bash dre_ood.sh train score both "0 1 2 3" "1 2 3407"
+    ```
+    `dre_ood.sh` centralizes:
+    - Shared OOD hyperparameters (epochs, LR, noise level, imglist mode, path type, etc.)
+    - Method lists:
+      - Neural: `NEURAL_METHODS=(nce pw chisq infonce logistic)`
+      - Score: `SCORE_METHODS=(dre_infty d3re osdre)`
+    - GPU scheduling logic for training mode.
 
 ## OOD detection: tasks and parameters
 
@@ -179,40 +313,40 @@ python main.py fdiv_estimation --subtask ood_detection --ood_use_imglist True --
 | `change_point_detection` | cpd_mc, cpd_text, cpd_creditcard | Detect change points in time series |
 | `ood_detection` | mnist, fashion_mnist, cifar10, cifar100 | Detect out-of-distribution samples |
 
-## Data Acquisition（数据获取）
+## Data Acquisition
 
-本节说明各任务/子任务下数据的来源、存放位置及获取方式。数据根目录由 `--data_dir` 指定，默认为 `../data`。
+This section summarizes where the data for each task/subtask comes from, where it is stored, and how to prepare it. The root data directory is specified by `--data_dir` (default `../data`).
 
 ### Likelihood Estimation
 
-| 子任务 | 数据来源 | 存放位置 / 获取方式 |
-|--------|----------|----------------------|
-| **synthetic2d** | 程序内生成 | 无需下载，内存中合成（如 swissroll、8gaussians、pinwheel 等） |
-| **tabular** | 本地文件（UCI 等） | 需手动将数据放到 `{data_dir}/tabular/` 下，并按下列结构放置：<br>• **BSDS300**: `BSDS300/BSDS300.hdf5`<br>• **power**: `power/data.npy`<br>• **gas**: `gas/ethylene_CO.pickle`<br>• **hepmass**: `hepmass/1000_train.csv`, `hepmass/1000_test.csv`<br>• **miniboone**: `miniboone/data.npy` |
-| **real_image** | 自动下载 + 本地 | **mnist / fashion_mnist / cifar10 / svhn / lsun_church / celeba**：通过 torchvision `download=True` 下载到 `{data_dir}`。<br>**frey_face**：需自行将 `frey_rawface.mat` 放到 `{data_dir}` 下。 |
+| Subtask | Source | Location / How to obtain |
+|--------|--------|--------------------------|
+| **synthetic2d** | Generated in code | No download required; datasets (e.g., swissroll, 8gaussians, pinwheel, etc.) are generated on the fly. |
+| **tabular** | Local files (UCI, etc.) | Place data under `{data_dir}/tabular/` with the following structure:<br>• **BSDS300**: `BSDS300/BSDS300.hdf5`<br>• **power**: `power/data.npy`<br>• **gas**: `gas/ethylene_CO.pickle`<br>• **hepmass**: `hepmass/1000_train.csv`, `hepmass/1000_test.csv`<br>• **miniboone**: `miniboone/data.npy` |
+| **real_image** | Torchvision download + local | **mnist / fashion_mnist / cifar10 / svhn / lsun_church / celeba**: downloaded via torchvision with `download=True` into `{data_dir}`.<br>**frey_face**: manually place `frey_rawface.mat` under `{data_dir}`. |
 
-### F-Divergence Estimation
+### $f$-Divergence Estimation
 
-| 子任务 | 数据来源 | 存放位置 / 获取方式 |
-|--------|----------|----------------------|
-| **distribution_shift** | 程序内生成 | 合成数据（如 gauss_shift、beta_shift、cifar_c、domainbed），无需额外数据文件。 |
-| **mutual_information** | 程序内生成 | 合成数据（如 half_cube_map、gauss 等），无需下载。 |
-| **mi_realdata** | 自动下载 + 本地 | 使用 `args.data_dir`：图像（MNIST/CIFAR-10）由 torchvision 下载；文本（IMDB 等）需按代码约定放在 `{data_dir}` 对应子目录下。 |
-| **change_point_detection** | 本地文件 / 合成 | **cpd_mc**：合成数据，无需文件。<br>**cpd_text**：需将 `Language Detection.csv` 放在 `./data/density_ratio_estimation/change_point_detection/`（或代码中配置的路径）。<br>**cpd_creditcard**：需将 `creditcard.txt`（或同名 CSV）放在同一目录。 |
-| **ood_detection** | 见下方 OOD 小节 | 见 [OOD 数据：txt 与图像如何获取](#ood-数据txt-与图像如何获取)。 |
+| Subtask | Source | Location / How to obtain |
+|--------|--------|--------------------------|
+| **distribution_shift** | Generated in code | Synthetic data (e.g., gauss_shift, beta_shift, cifar_c, domainbed); no external files needed. |
+| **mutual_information** | Generated in code | Synthetic data (e.g., half_cube_map, gauss); no download required. |
+| **mi_realdata** | Torchvision + local text data | Uses `args.data_dir`: image data (MNIST/CIFAR-10) is downloaded via torchvision; text data (IMDB, etc.) should be placed under the corresponding subdirectories of `{data_dir}` as expected by the code. |
+| **change_point_detection** | Local files / synthetic | **cpd_mc**: synthetic, no files needed.<br>**cpd_text**: place `Language Detection.csv` under `./data/density_ratio_estimation/change_point_detection/` (or the path configured in the code).<br>**cpd_creditcard**: place `creditcard.txt` (or equivalent CSV) in the same directory. |
+| **ood_detection** | See OOD section below | See [OOD data: how to prepare txt and images](#ood-data-txt-and-images). |
 
-### OOD 数据：txt 与图像如何获取
+### OOD Data: txt and images
 
-- **仅用内置 ID 数据集（无 imglist）**  
-  ID 数据（如 CIFAR-10/CIFAR-100）通过 torchvision 自动下载到 `{data_dir}`；可选 `300K_random_images.npy` 用于 universal OOD，需自行准备并放在约定路径。
+- **Built-in ID datasets (no imglist)**  
+  ID datasets such as CIFAR-10/CIFAR-100 are downloaded automatically via torchvision into `{data_dir}`. An optional `300K_random_images.npy` can be used for universal OOD; you need to prepare this file yourself and place it at the expected path.
 
-- **使用 imglist 式 OOD（OpenOOD 风格）**  
-  两种方式任选其一：  
-  **方式 A**：运行脚本  
-  `python scripts/download_ood_benchmark.py`  
-  会拉取 `benchmark_imglist` 与 `images_classic` 到当前配置的数据目录（脚本内或环境指定的目录）。  
-  **方式 B**：从 [OpenOOD](https://github.com/Jingkang50/OpenOOD) 克隆并按其文档准备 `benchmark_imglist/` 与 `images_classic/`，再放到 `{data_dir}` 下，使目录结构与 `pl_data/ood_detection.py` 中的 `OOD_IMGLIST_BENCHMARKS`、`list_subdir`/`image_subdir` 一致（含 nearood/farood 等）。  
-  启用 imglist 时请使用 `--ood_use_imglist True`，且仅支持 `cifar10`/`cifar100` 作为 ID 数据集。
+- **Imglist-style OOD (OpenOOD-style)**  
+  Two options:  
+  **Option A**: use the helper script  
+  `python core/download_ood_benchmark.py`  
+  This downloads `benchmark_imglist` and `images_classic` into the configured data directory (either from the script or environment variables).  
+  **Option B**: clone [OpenOOD](https://github.com/Jingkang50/OpenOOD) and prepare `benchmark_imglist/` and `images_classic/` as described in its documentation, then place them under `{data_dir}` so that the layout matches `pl_data/ood_detection.py` (`OOD_IMGLIST_BENCHMARKS`, `list_subdir`/`image_subdir`, including near- and far-OOD).  
+  When using imglist mode, set `--ood_use_imglist True`; only `cifar10` and `cifar100` are supported as ID datasets.
 
 ## Method Configuration
 
@@ -392,20 +526,16 @@ You **do not** need to modify `UnifiedModel` when adding a new model. Instead:
 ## Directory Layout
 
 ```
-OS_DRE/
+OpenDRE/
 ├── main.py
 ├── config/           # Argument parsing (e.g. config_setting.py)
 ├── pl_data/          # DataModules and dataset configs
 ├── pl_models/        # Lightning modules per task
-├── nn_models/        # Model architectures (tabular_models, image_models, legacy UnifiedModel wrapper, layers aliases, nsf namespace)
-├── path/             # Path (ODE/SDE), Bayesian path
-├── losses/           # Score matching, kernel/neural DRE losses
-├── estimators/       # Likelihood and density-ratio estimators
-├── sampling/         # Sampling routines
-├── visualization/    # Plotting
-├── layers/           # Custom layers, activations
-├── core/             # Utils, data_utils, logger
-└── nsf/              # Optional NSF flows
+├── nn_models/        # Model architectures (tabular_models, image_models, legacy UnifiedModel wrapper, plus layers)
+├── nsf/              # Original NSF codebase (flows, datasets, experiments, checkpoints)
+├── dre/              # Core DRE components: paths, losses, estimators, polynomial bases
+├── core/             # Utils, data_utils, logger, sampling, visualization, helper scripts
+└── results/          # Experiment logs, figures, and tables
 ```
 
 

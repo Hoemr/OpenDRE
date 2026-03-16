@@ -39,25 +39,37 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
         self.train_step_fn = train_step_fns.ScoreMatchingTrainStepFn(args, self.path)
         self.model = self.build_model()
         self.train_epoch_end_step_fn = lambda: None
-        self.flow = self.load_pretrained_flow_model()
-        self.flow.eval()
-        for param in self.flow.parameters():
-            param.requires_grad = False
+        use_pretrained_flow = getattr(args, "use_pretrained_flow", False)
+        if use_pretrained_flow:
+            # Use NSF flow as a fixed data transform (requires checkpoints and data stats).
+            self.flow = self.load_pretrained_flow_model()
+            self.flow.eval()
+            for param in self.flow.parameters():
+                param.requires_grad = False
 
-        def flow_fn(batch, train=False):
-            shape = batch.shape
-            with torch.no_grad():
-                x_processed = batch * 255. / 256.
-                x_processed += torch.rand_like(x_processed) / 256.
-                x_processed *= 256.
-                batch, log_det_J = self.flow.transform_to_noise(x_processed, logdet=True, transform=True, train=train)
-                batch = batch.reshape(shape)
-            return batch, log_det_J
-        self.flow_fn = flow_fn
+            def flow_fn(batch, train=False):
+                shape = batch.shape
+                with torch.no_grad():
+                    x_processed = batch * 255.0 / 256.0
+                    x_processed += torch.rand_like(x_processed) / 256.0
+                    x_processed *= 256.0
+                    batch_z, log_det_J = self.flow.transform_to_noise(
+                        x_processed, logdet=True, transform=True, train=train
+                    )
+                    batch_z = batch_z.reshape(shape)
+                return batch_z, log_det_J
+
+            self.flow_fn = flow_fn
+        else:
+            # Default: identity transform, no NSF dependency.
+            def flow_fn(batch, train=False):
+                return batch, None
+
+            self.flow_fn = flow_fn
 
     def load_pretrained_flow_model(self):
-        from nn_models.nsf.experiments.images_noise import create_transform
-        from nn_models.nsf.nde import distributions, transforms, flows
+        from nsf.experiments.images_noise import create_transform
+        from nsf.nde import distributions, transforms, flows
 
         with open(os.path.join("nsf", "flow_ckpts", "test_data_stats.p"), "rb") as fp:
             data_stats = pickle.load(fp)
@@ -78,12 +90,27 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
         }
         distribution = distributions.StandardNormal((c * h * w,))
         train_transform, val_transform, transform = create_transform(
-            c, h, w, train_mean, val_mean, train_cov, val_cov,
-            levels=2, hidden_channels=64, steps_per_level=8, alpha=0.000001,
-            num_bits=8, preprocessing="realnvp_2alpha", multi_scale=False,
-            actnorm=True, coupling_layer_type="rational_quadratic_spline",
-            spline_params=spline_params, use_resnet=False, num_res_blocks=2,
-            resnet_batchnorm=False, dropout_prob=0.0
+            c,
+            h,
+            w,
+            train_mean,
+            val_mean,
+            train_cov,
+            val_cov,
+            levels=2,
+            hidden_channels=64,
+            steps_per_level=8,
+            alpha=0.000001,
+            num_bits=8,
+            preprocessing="realnvp_2alpha",
+            multi_scale=False,
+            actnorm=True,
+            coupling_layer_type="rational_quadratic_spline",
+            spline_params=spline_params,
+            use_resnet=False,
+            num_res_blocks=2,
+            resnet_batchnorm=False,
+            dropout_prob=0.0,
         )
         net = flows.FlowDataTransform(transform, distribution, train_transform, val_transform)
         net = net.to(device)

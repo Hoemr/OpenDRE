@@ -1,33 +1,37 @@
+import numpy as np
+
 import os
 import zipfile
 
 import torch
 from torch.utils.data import Dataset
-from data import UnlabelledImageFolder
-from data.download import download_file_from_google_drive
-import numpy as np
 
-class ImageNet32(UnlabelledImageFolder):
-    GOOGLE_DRIVE_FILE_ID = '1TXsg8TP5SfsSL6Gk39McCkZu9rhSQnNX'
-    UNZIPPED_DIR_NAME = 'imagenet32'
-    UNZIPPED_TRAIN_SUBDIR = 'train_32x32'
-    UNZIPPED_VAL_SUBDIR = 'valid_32x32'
+from .base import UnlabelledImageFolder
+from .download import download_file_from_google_drive
 
-    def __init__(self, root, train=True, download=False, transform=None):
+
+class CelebA(UnlabelledImageFolder):
+    """Unlabelled standard CelebA dataset, the aligned version."""
+    GOOGLE_DRIVE_FILE_ID = '0B7EVK8r0v71pZjFTYXZWM3FlRnM'
+    ZIP_FILE_NAME = 'img_align_celeba.zip'
+
+    def __init__(self, root, transform=None, download=False):
         if download:
-            self._download(root)
+            self.download(root)
+        super(CelebA, self).__init__(os.path.join(root, self.img_dir),
+                                     transform=transform)
 
-        img_dir = 'train' if train else 'val'
-        super(ImageNet32, self).__init__(os.path.join(root, img_dir),
-                                         transform=transform)
+    @property
+    def img_dir(self):
+        return 'img_align_celeba'
 
-    def _download(self, root):
-        if os.path.isdir(os.path.join(root, 'train')):
-            return  # Downloaded already
+    def download(self, root):
+        if os.path.isdir(os.path.join(root, self.img_dir)):
+            return # Downloaded already
 
         os.makedirs(root, exist_ok=True)
 
-        zip_file = os.path.join(root, self.UNZIPPED_DIR_NAME + '.zip')
+        zip_file = os.path.join(root, self.ZIP_FILE_NAME)
 
         print('Downloading {}...'.format(os.path.basename(zip_file)))
         download_file_from_google_drive(self.GOOGLE_DRIVE_FILE_ID, zip_file)
@@ -35,30 +39,35 @@ class ImageNet32(UnlabelledImageFolder):
         print('Extracting {}...'.format(os.path.basename(zip_file)))
         with zipfile.ZipFile(zip_file, 'r') as fp:
             fp.extractall(root)
+
         os.remove(zip_file)
 
-        os.rename(os.path.join(root, self.UNZIPPED_DIR_NAME, self.UNZIPPED_TRAIN_SUBDIR),
-                  os.path.join(root, 'train'))
-        os.rename(os.path.join(root, self.UNZIPPED_DIR_NAME, self.UNZIPPED_VAL_SUBDIR),
-                  os.path.join(root, 'val'))
-        os.rmdir(os.path.join(root, self.UNZIPPED_DIR_NAME))
 
+class CelebAHQ(CelebA):
+    """Unlabelled high quality CelebA dataset with 256x256 images."""
+    GOOGLE_DRIVE_FILE_ID = '1psLniAvAvyDgJV8DBk7cvTZ9EasB_2tZ'
+    ZIP_FILE_NAME = 'celeba-hq-256.zip'
 
-class ImageNet64(ImageNet32):
-    GOOGLE_DRIVE_FILE_ID = '1NqpYnfluJz9A2INgsn16238FUfZh9QwR'
-    UNZIPPED_DIR_NAME = 'imagenet64'
-    UNZIPPED_TRAIN_SUBDIR = 'train_64x64'
-    UNZIPPED_VAL_SUBDIR = 'valid_64x64'
+    def __init__(self, root, transform=None, train=True, download=False):
+        self.train = train
+        super().__init__(root, transform=transform, download=download)
 
-class ImageNet64Fast(Dataset):
+    @property
+    def img_dir(self):
+        if self.train:
+            return 'celeba-hq-256/train-png'
+        else:
+            return 'celeba-hq-256/validation-png'
+
+class CelebAHQ64Fast(Dataset):
     GOOGLE_DRIVE_FILE_ID = {
-        'train': '15AMmVSX-LDbP7LqC3R9Ns0RPbDI9301D',
-        'valid': '1Me8EhsSwWbQjQ91vRG1emkIOCgDKK4yC'
+        'train': '1bcaqMKWzJ-2ca7HCQrUPwN61lfk115TO',
+        'valid': '1WfE64z9FNgOnLliGshUDuCrGBfJSwf-t'
     }
 
     NPY_NAME = {
-        'train': 'train_64x64.npy',
-        'valid': 'valid_64x64.npy'
+        'train': 'train.npy',
+        'valid': 'valid.npy'
     }
 
     def __init__(self, root, train=True, download=False, transform=None):

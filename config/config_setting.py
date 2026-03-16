@@ -131,6 +131,15 @@ def get_likelihood_args(parser):
     parser.add_argument("--data_dir", type=str, default="../data")
     parser.add_argument("--layer_mode", type=str, default="conv")
     parser.add_argument('--val_split', type=float, default=0.1)
+    parser.add_argument(
+        "--use_pretrained_flow",
+        type=eval,
+        default=False,
+        choices=[True, False],
+        help="Whether to use the pretrained NSF flow as a learnable data transform "
+             "for real-image density estimation. If False (default), an identity "
+             "transform is used and no NSF checkpoints are required.",
+    )
 
     return parser
 

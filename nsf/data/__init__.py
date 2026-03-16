@@ -7,9 +7,9 @@ from .base import (
     batch_generator,
     InfiniteLoader,
     load_num_batches,
-    UnlabelledImageFolder
+    UnlabelledImageFolder,
 )
-from data.download import download_file, download_file_from_google_drive
+from .download import download_file, download_file_from_google_drive
 
 from .plane import TestGridDataset
 
