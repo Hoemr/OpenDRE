@@ -1,4 +1,4 @@
-# OS_DRE: A Unified Framework for Score-based Density Ratio Estimation
+# OpenDRE: A Unified Framework for Score-based Density Ratio Estimation
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
@@ -52,19 +52,11 @@ The codebase is split into top-level packages for easier navigation:
 | Package | Contents |
 |---------|----------|
 | `nn_models/` | Neural network models (`tabular_models`, `image_models`, legacy `UnifiedModel` wrapper, plus logical `layers` / `nsf` modules) |
-| `layers/` | (Legacy) custom layers and activations; now re-exported via `nn_models.activations` / `nn_models.layers_core` / `nn_models.blocks` |
-| `polynomials/` | Polynomial basis (e.g. for score decomposition) |
 | `pl_data/` | Lightning DataModules and dataset configs |
-| `losses/` | Training objectives (score matching, kernel/neural DRE) |
-| `estimators/` | Likelihood / density-ratio estimators, quadrature, metrics |
-| `path/` | Path (ODE/SDE) and Bayesian path (path_base.py, bayesian_path.py) |
 | `pl_models/` | Lightning modules per task |
-| `nsf/` | (Legacy) NSF flows; now re-exported under `nn_models.nsf` |
+| `dre/` | Core DRE components: paths (`dre/path`), losses (`dre/losses`), estimators (`dre/estimators.py`), polynomial bases (`dre/polynomials.py`) |
+| `core/` | Project helpers (utils.py, data_utils.py, tabular/), sampling routines, plotting/visualization, logger (`core/logger.py`), and helper scripts (e.g. `download_ood_benchmark.py`). Named `core` to avoid shadowing torchquad's `utils`. |
 | `config/` | Argument parsing and save paths |
-| `logger/` | Logging utilities |
-| `sampling/` | (Deprecated) old sampling entry; functionality lives in `core/sampling.py` |
-| `visualization/` | (Deprecated) old plotting entry; functionality lives in `core/visualization.py` |
-| `core/` | Project helpers (utils.py, data_utils.py, tabular/), sampling routines, plotting/visualization, and helper scripts (e.g. `download_ood_benchmark.py`). Named `core` to avoid shadowing torchquad's `utils`. |
 
 Import examples: `from pl_data import SUBTASK_DATA_MODULES`, `from nn_models import JointScoreModel`, `from config import parse_args`, `from path import ToyInterpXt`.
 
