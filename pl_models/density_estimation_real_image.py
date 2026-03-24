@@ -148,14 +148,23 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
         else:
             dim = np.prod(DATA_SHAPES[self.data_type])
         if log_det_J is not None:
-            nll = nll - log_det_J.mean()
+            # Flow path: convert from latent-space NLL to data-space NLL using log|det J|.
+            if hasattr(log_det_J, "mean"):
+                nll = nll - log_det_J.mean()
+            else:
+                nll = nll - float(log_det_J)
         else:
+            # Identity / normalized-data path: account for x -> (x-mean)/std normalization.
             channels, _, stds = SPECS[self.data_type]
             log_sigma_per_channel = sum(math.log(s) for s in stds)
             pixels_per_channel = dim / channels
             log_det_correction = pixels_per_channel * log_sigma_per_channel
             nll += log_det_correction
-        return nll, nll / (np.log(2) * dim)
+
+        # Report BPD in standard 8-bit units for readability/comparison.
+        # bpd8 = (-log p(x) + dim * log 256) / (dim * log 2)
+        bpd_8bit = (nll + dim * math.log(256.0)) / (math.log(2.0) * dim)
+        return nll, bpd_8bit
 
     def sampling(self, n_samples, method="HMC", num_steps=100, step_size=0.1, filename="best", **kwargs):
         with torch.enable_grad():
