@@ -154,30 +154,29 @@ class NeuralDensityRatioTrainStepFn:
     def nce_loss(self, model, qx, px):
         """
         Noise-Contrastive Estimation (NCE) Loss.
-        [Gutmann & Hyvärinen, 2010, 2012]
-        This is a weighted BCE loss where K = |p0| / |p1|.
-        The model f(x) = log r(x) is trained to output g(x) = f(x) - log K.
-        Loss = E_{p1}[softplus(-g(x))] + E_{p0}[softplus(g(x))]
-        (Note: E_{p0} is already weighted by K in the batch, assuming K = M/N)
-        
+
+        Gutmann & Hyvärinen (2010, 2012).  Given K = M/N noise samples per
+        positive sample, the classifier is  g(x) = log r(x) - log K  and the
+        correctly weighted NCE objective is
+
+            L = (1/N) [ \Sigma_{x~p} softplus(-g(x)) + \Sigma_{x~q} softplus(g(x)) ].
+
         Reference:
-        [3] Gutmann, M., & Hyvärinen, A. (2010). Noise-contrastive estimation: A new estimation 
-            principle for unnormalized statistical models. AISTATS.
+        [3] Gutmann, M., & Hyvärinen, A. (2010). Noise-contrastive estimation:
+            A new estimation principle for unnormalized statistical models. AISTATS.
         """
         N = px.shape[0]
         M = qx.shape[0]
         K = M / N
         log_k = torch.log(torch.tensor(K, device=px.device, dtype=torch.float32))
-        log_r_qx = model(qx) # f(x) for x ~ p0
-        log_r_px = model(px) # f(x) for x ~ p1
-        # The classifier logits are g(x) = f(x) - log K
+        log_r_qx = model(qx)  # f(x) for x ~ p0
+        log_r_px = model(px)  # f(x) for x ~ p1
+        # Classifier logits: g(x) = f(x) - log K
         g_qx = log_r_qx - log_k
         g_px = log_r_px - log_k
-        # Standard BCE loss on g(x)
-        loss_q = torch.mean(F.softplus(g_qx)) 
-        loss_p = torch.mean(F.softplus(-g_px))
-        
-        loss = loss_p + loss_q
+        # Correct NCE weighting: sum over all samples, divide by N
+        loss = (torch.sum(F.softplus(-g_px)) + torch.sum(F.softplus(g_qx))) / N
+
         nll = self._calc_nll(log_r_px, px)
         return loss, nll
     
@@ -221,27 +220,32 @@ class NeuralDensityRatioTrainStepFn:
     
     def kl_loss(self, model, qx, px):
         """
-        Forward KL Loss (KL(p1 || p0) variant, related to KLIEP).
-        Estimate KL(p1 || p0) using the Fenchel dual:
-        KL(p1 || p0) = sup_T E_{p1}[T(x)] - E_{p0}[exp(T(x) - 1)]
-        
+        Forward KL density-ratio estimation (Nguyen et al., 2007).
+
+        The Fenchel dual for KL(p1 || p0) is:
+            D_KL = sup_T  E_{p1}[T(x)] - E_{p0}[exp(T(x) - 1)]
+
+        The maximiser satisfies  T*(x) = 1 + log(p1(x)/p0(x)).
+        Since the model outputs  log r(x) = log(p1/p0), we set
+            T(x) = log r(x) + 1
+
+        Substituting into the dual and dropping the constant -1:
+            loss = -E_{p1}[log r] + E_{p0}[r]
+
         Reference:
-        [5] Nguyen, X., Wainwright, M. J., & Jordan, M. I. (2007). Estimating divergence 
+        [5] Nguyen, X., Wainwright, M. J., & Jordan, M. I. (2007). Estimating divergence
             functionals and the likelihood ratio by penalized convex risk minimization. NeurIPS.
         """
-        T_px = model(px)                    # ~ p1
-        T_qx = model(qx)                    # ~ p0
+        log_r_px = model(px)  # log r(x), x ~ p1
+        log_r_qx = model(qx)  # log r(x), x ~ p0
 
-        T_qx = torch.clamp(T_qx, min=-10, max=10)
+        log_r_qx = torch.clamp(log_r_qx, min=-10, max=10)
+        r_qx = torch.exp(log_r_qx)
 
-        # Dual form: E_{p1}[T] - E_{p0}[exp(T - 1)]
-        dual = torch.mean(T_px) - torch.mean(torch.exp(T_qx - 1))
-        loss = -dual
+        # loss = -E_p1[log r] + E_p0[r]   (constant -1 dropped; gradient-preserving)
+        loss = -torch.mean(log_r_px) + torch.mean(r_qx)
 
-        # Optional L2 penalty on outputs
-        # loss += self.reg_param * torch.mean(log_r_qx**2)
-        nll = self._calc_nll(T_px, px)
-        # Note: We maximize this, so if you minimize loss, return -loss
+        nll = self._calc_nll(log_r_px, px)
         return loss, nll
     
     def rkl_loss(self, model, qx, px):
@@ -291,27 +295,31 @@ class NeuralDensityRatioTrainStepFn:
     
     def hellinger_loss(self, model, qx, px):
         r"""
-        Hellinger Distance Loss (Approximation via f-Divergence).
-        f(r) = (sqrt(r) - 1)^2. 
-        Dual form: E_{p0}[r] - 2 * E_{p1}[\sqrt{r}] + 1
-        
+        Hellinger-distance density-ratio estimation (Nowozin et al., 2016).
+
+        Hellinger f-divergence:  f(u) = (\sqrt{u} - 1)^2,  dom_f* = {t < 1}.
+
+        Using the f-GAN variational form with T = 1 - 1/\sqrt{r}:
+            loss = E_q[\sqrt{r}] + E_p[1 / \sqrt{r}]
+
+        Gradient check — at optimum:
+            q / \sqrt{r}  =  p / r^{3/2}   =>   r(x) = p(x) / q(x).
+
         Reference:
-        [8] Birrell, J., Dupuis, P., Katsoulakis, M. A., Rey-Bellet, L., & Wang, J. (2021). 
-            Variational representations and neural network estimation of Rényi divergences. 
-            SIAM Journal on Mathematics of Data Science.
+        [8] Nowozin, S., Cseke, B., & Tomioka, R. (2016). f-GAN: Training generative
+            neural samplers using variational divergence minimization. NeurIPS.
         """
         log_r_qx = model(qx)
         log_r_px = model(px)
         r_qx = torch.exp(torch.clamp(log_r_qx, min=-10, max=10))
         r_px = torch.exp(torch.clamp(log_r_px, min=-10, max=10))
-        
-        sqrt_r_px = torch.sqrt(r_px)
-        
-        # Simpler form derived from the dual
-        loss = torch.mean(r_qx) - 2 * torch.mean(sqrt_r_px) + 1.0 
-        
-        # Add L2 regularization on the log-ratio output
-        # loss += self.reg_param * torch.mean(log_r_qx**2)
+
+        sqrt_r_qx = torch.sqrt(r_qx + 1e-8)
+        inv_sqrt_r_px = 1.0 / torch.sqrt(r_px + 1e-8)
+
+        # loss = E_q[\sqrt{r}] + E_p[1 / \sqrt{r}]
+        loss = torch.mean(sqrt_r_qx) + torch.mean(inv_sqrt_r_px)
+
         nll = self._calc_nll(log_r_px, px)
         return loss, nll
     

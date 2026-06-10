@@ -18,7 +18,12 @@ class KernelDensityRatioModel(nn.Module):
         self.reg_param = getattr(args, 'reg_param', 1.0)
         self.path_model = path_model
         # Increase the upper limit on the number of training samples
-        self.max_samples = getattr(args, 'max_parametric_samples', 2000) 
+        self.max_samples = getattr(args, 'max_parametric_samples', 2000)
+        # Number of kernel centers (drawn from p1/numerator samples, per standard formulation)
+        self.n_centers = getattr(args, 'n_centers', 200)
+        # KLIEP-specific parameters
+        self.kliep_epsilon = getattr(args, 'kliep_epsilon', 1e-4)
+        self.kliep_max_iter = getattr(args, 'kliep_max_iter', 5000) 
         
         self.is_trained = False
         self.training_data = {'qx': [], 'px': []}
@@ -180,180 +185,248 @@ class KernelDensityRatioModel(nn.Module):
         
     def _perform_kulsif_grid_search(self, all_qx, all_px):
         """
-        Perform parameter grid search and single-fold cross-validation for KuLSIF.
-        Search over lambda (reg_param).
+        Perform parameter grid search with cross-validation for KuLSIF.
+        Uses the proper uLSIF objective (0.5*E_q[r²] - E_p[r]) on validation data
+        to select the regularization parameter lambda.
         """
         print("\n--- Starting KuLSIF Parameter Grid Search ---")
 
-        # 1. Split into training and validation sets (one-fold CV)
+        # 1. Split into training and validation sets (stratified 80/20)
         X = np.vstack([all_qx, all_px])
-        # Target labels (y=1: p1, y=0: p0)
-        y = np.hstack([np.zeros(len(all_qx)), np.ones(len(all_px))]) 
-        
-        # Split data into 80% training and 20% validation
+        y = np.hstack([np.zeros(len(all_qx)), np.ones(len(all_px))])
+
         X_train, X_val, y_train, y_val = train_test_split(
             X, y, test_size=0.2, stratify=y, random_state=42
         )
-        
-        # Separate p0 and p1 samples from X_train
+
         qx_train = X_train[y_train == 0]
         px_train = X_train[y_train == 1]
-        
-        # Define centers for kernel computation
-        # Alpha is always computed relative to X_train, so centers must be X_train
-        X_centers = X_train
-        
-        # 2. Define search grid
-        lambda_candidates = 10.0 ** (-np.arange(start=-3.0, step=1.0, stop=5.0)) 
-        
-        best_score = -np.inf
-        best_lambda = self.reg_param  # initial value
+        qx_val = X_val[y_val == 0]
+        px_val = X_val[y_val == 1]
+
+        # 2. Pre-select centers from px_train (numerator samples) — fixed for fair comparison
+        n_ctr = min(self.n_centers, len(px_train))
+        center_idx = np.random.choice(len(px_train), n_ctr, replace=False)
+        centers_train = px_train[center_idx]
+
+        # 3. Define search grid over lambda (log-spaced)
+        lambda_candidates = np.logspace(-6, 1, 15)
+
+        best_loss = np.inf
+        best_lambda = self.reg_param
         gamma = self.rbf_gamma_value
 
-        # 3. Evaluate each candidate
+        # 4. Evaluate each lambda candidate
         for reg_param in lambda_candidates:
             try:
-                # Temporarily train alpha using X_centers (X_train)
-                alpha, cond_num = self._train_kulsif_temp(qx_train, px_train, gamma, reg_param)
-                if alpha is None: continue
+                # Train alpha on training set with pre-selected centers
+                alpha, cond_num = self._train_kulsif_temp(
+                    qx_train, px_train, gamma, reg_param, centers=centers_train
+                )
+                if alpha is None:
+                    continue
 
-                # Evaluation metric: maximize E_{p1}[r(x)]
-                # Centers must be X_centers (X_train)
-                K_val = rbf_kernel(X_val[y_val==1], X_centers, gamma=gamma)
-                ratios_p1_val = K_val @ alpha
-                
-                # Use mean ratio on validation p1 samples as the score
-                val_score = np.mean(ratios_p1_val) 
+                # Evaluate proper uLSIF loss on validation set:
+                #   J(r) = 0.5 * E_q[r²] - E_p[r]
+                # Lower is better.
+                K_val_q = rbf_kernel(qx_val, centers_train, gamma=gamma)
+                K_val_p = rbf_kernel(px_val, centers_train, gamma=gamma)
+                ratios_q_val = K_val_q @ alpha
+                ratios_p_val = K_val_p @ alpha
+                val_loss = 0.5 * np.mean(ratios_q_val ** 2) - np.mean(ratios_p_val)
 
-                if val_score > best_score:
-                    best_score = val_score
+                if val_loss < best_loss:
+                    best_loss = val_loss
                     best_lambda = reg_param
-                    
-                print(f"  Lambda={reg_param:.4e}: R(p1)_mean={val_score:.4f}, Cond={cond_num:.2e}")
+
+                print(f"  Lambda={reg_param:.4e}: Loss={val_loss:.4f}, "
+                      f"R(q)_mean={np.mean(ratios_q_val):.3f}, "
+                      f"R(p)_mean={np.mean(ratios_p_val):.3f}, Cond={cond_num:.2e}")
 
             except Exception as e:
-                import traceback
                 print(f"  Lambda={reg_param:.4e}: Failed (Error: {type(e).__name__})")
                 continue
 
         self.reg_param = best_lambda
-        print(f"--- Search Complete: Best Lambda={best_lambda:.4e}, R(p1)_mean={best_score:.4f} ---")
+        print(f"--- Search Complete: Best Lambda={best_lambda:.4e}, Val Loss={best_loss:.4f} ---")
 
-    def _train_kulsif_temp(self, qx, px, gamma, reg_param):
-        """Temporary KuLSIF training function used during grid search."""
-        n0, n1 = len(qx), len(px)
-        # X serves as centers: qx + px
-        X = np.vstack([qx, px]) 
-        
-        K = rbf_kernel(X, X, gamma=gamma)
-        K_p0 = K[:n0, :]
-        
-        # Target vector h uses kernel mean over p1 samples
-        h = np.mean(K[n0:, :], axis=0) 
-        
-        # Hessian matrix
-        H = K_p0.T @ K_p0 / n0
-        
-        cond_num = np.linalg.cond(H)
-        
-        H_reg = H + reg_param * np.eye(len(X))
-        
+    def _train_kulsif_temp(self, qx, px, gamma, reg_param, centers=None):
+        """Temporary KuLSIF training function used during grid search.
+
+        Per the standard uLSIF formulation (Kanamori et al. 2009):
+          r(x) = Σ α_i k(x, c_i)   with centers c_i drawn from px (numerator).
+          Ĥ = (1/n_q) Σ_{x~q} φ(x) φ(x)ᵀ      [n_ctr × n_ctr]
+          ĥ = (1/n_p) Σ_{x~p} φ(x)             [n_ctr]
+          α = (Ĥ + λ I)⁻¹ ĥ
+        """
+        n_q = len(qx)
+
+        if centers is None:
+            n_ctr = min(self.n_centers, len(px))
+            idx = np.random.choice(len(px), n_ctr, replace=False)
+            centers = px[idx]
+        n_ctr = len(centers)
+
+        # Kernel matrices: rows=samples, cols=centers
+        K_q = rbf_kernel(qx, centers, gamma=gamma)  # (n_q, n_ctr)
+        K_p = rbf_kernel(px, centers, gamma=gamma)  # (n_p, n_ctr)
+
+        # h = E_p[φ(x)]  — mean kernel embedding of numerator distribution
+        h = np.mean(K_p, axis=0)                     # (n_ctr,)
+
+        # H = E_q[φ(x) φ(x)ᵀ] — covariance of kernel features under denominator
+        H = K_q.T @ K_q / n_q                        # (n_ctr, n_ctr)
+
+        cond_num = np.linalg.cond(H + reg_param * np.eye(n_ctr))
+
+        H_reg = H + reg_param * np.eye(n_ctr)
+
         try:
             alpha = np.linalg.solve(H_reg, h)
         except np.linalg.LinAlgError:
-            # Fallback to least squares if direct solve fails
             alpha = np.linalg.lstsq(H_reg, h, rcond=1e-5)[0]
-        
+
+        # Non-negativity truncation (uLSIF is "unconstrained", but truncation is standard post-processing)
         alpha = np.maximum(alpha, 0)
-        
-        # Normalize so that E_{p0}[r(x)] = 1
-        mean_ratio_p0 = np.mean(K_p0 @ alpha)
-        if mean_ratio_p0 > 1e-6:
-            alpha = alpha / mean_ratio_p0
+
+        # Normalize so that E_q[r(x)] = 1
+        mean_ratio_q = np.mean(K_q @ alpha)
+        if mean_ratio_q > 1e-6:
+            alpha = alpha / mean_ratio_q
             return alpha, cond_num
-        
-        return None, cond_num  # Training failed
+
+        return None, cond_num
 
     def _train_kulsif(self, qx, px, reg_param, gamma):
-        """KuLSIF method – train final model using best parameters."""
-        n0, n1 = len(qx), len(px)
-        self.training_points = X = np.vstack([qx, px])
-        
-        K = rbf_kernel(X, X, gamma=gamma)
-        K_p0 = K[:n0, :]
-        
-        h = np.mean(K[n0:, :], axis=0)
-        H = K_p0.T @ K_p0 / n0
-        
+        """KuLSIF method — train final model with best regularization parameter.
+
+        Per the standard uLSIF formulation (Kanamori et al. 2009):
+          Centers are drawn from px (numerator) only.
+          α = (Ĥ + λ I)⁻¹ ĥ,  with Ĥ from q-samples, ĥ from p-samples.
+        """
+        n_q, n_p = len(qx), len(px)
+
+        # Select centers from px (numerator) samples only
+        n_ctr = min(self.n_centers, n_p)
+        ctr_idx = np.random.choice(n_p, n_ctr, replace=False)
+        self.training_points = px[ctr_idx]
+
+        # Kernel matrices: rows=samples, cols=centers
+        K_q = rbf_kernel(qx, self.training_points, gamma=gamma)  # (n_q, n_ctr)
+        K_p = rbf_kernel(px, self.training_points, gamma=gamma)  # (n_p, n_ctr)
+
+        # h = E_p[φ(x)]
+        h = np.mean(K_p, axis=0)                                   # (n_ctr,)
+        # H = E_q[φ(x) φ(x)ᵀ]
+        H = K_q.T @ K_q / n_q                                      # (n_ctr, n_ctr)
+
         cond_num = np.linalg.cond(H)
-        print(f"H condition number (Final): {cond_num:.2e}")
-        
+        print(f"H matrix ({n_ctr}×{n_ctr}), condition number (unregularized): {cond_num:.2e}")
+
         final_reg = reg_param
-        
-        # If condition number is too high, enforce stronger regularization for stability
-        if cond_num > 1e12:  # 1e12 is a threshold for severe ill-conditioning
-            safe_reg = max(reg_param, 100.0)
-            if cond_num > 1e14:
-                safe_reg = max(safe_reg, 500.0)
-            
-            final_reg = safe_reg
-            print(f"Applying strong regularization due to cond_num. Final Reg={final_reg:.4f}")
-        
-        H_reg = H + final_reg * np.eye(len(X))
-        
+
+        # If condition number is extremely high, increase regularization
+        if cond_num > 1e10:
+            final_reg = max(reg_param, 1.0)
+            print(f"Increasing regularization: {final_reg:.4f}")
+
+        H_reg = H + final_reg * np.eye(n_ctr)
+
         try:
             self.alpha = np.linalg.solve(H_reg, h)
         except np.linalg.LinAlgError:
             self.alpha = np.linalg.lstsq(H_reg, h, rcond=1e-5)[0]
-        
+
+        # Non-negativity truncation
         self.alpha = np.maximum(self.alpha, 0)
-        
-        mean_ratio_p0 = np.mean(K_p0 @ self.alpha)
-        if mean_ratio_p0 > 1e-6:
-            self.alpha = self.alpha / mean_ratio_p0
-            print(f"Normalized alpha by factor {mean_ratio_p0:.4f}")
+
+        # Normalize so that E_q[r(x)] = 1
+        mean_ratio_q = np.mean(K_q @ self.alpha)
+        if mean_ratio_q > 1e-6:
+            self.alpha = self.alpha / mean_ratio_q
+            print(f"Normalized alpha by E_q[r] = {mean_ratio_q:.4f}")
         else:
-            print("Warning: Final KuLSIF normalization failed.")
+            print("Warning: Final KuLSIF normalization failed (E_q[r] ≈ 0).")
             self.alpha = None
     
     def _train_kliep(self, qx, px, gamma):
-        """KLIEP method – train using fixed gamma."""
-        n0, n1 = len(qx), len(px)
-        self.training_points = X = np.vstack([qx, px])
-        
-        K = rbf_kernel(X, X, gamma=gamma)
-        
-        K_p0 = K[:n0, :]
-        K_p1_train = K[n0:, :] 
-        
-        alpha = np.ones(K.shape[1]) / K.shape[1]
-        
-        # Increase iterations to ensure convergence
-        for iteration in range(1000): 
-            r_p1 = K_p1_train @ alpha
-            r_p1 = np.maximum(r_p1, 1e-10)
-            
-            grad = np.mean(K_p1_train / r_p1[:, np.newaxis], axis=0)
-            alpha_new = alpha * grad
-            
-            norm = np.mean(K_p0 @ alpha_new)
-            if norm > 1e-8:
-                alpha_new = alpha_new / norm
-            else:
-                break
-            
-            if np.max(np.abs(alpha_new - alpha)) < 1e-6:
+        """KLIEP method — train with additive gradient ascent.
+
+        Standard KLIEP (Sugiyama et al. 2008):
+          Centers c_i are drawn from px (test/numerator) only.
+          Maximise  J(α) = (1/n_p) Σ_j log ŵ(x_j^p)
+          subject to (1/n_q) Σ_i ŵ(x_i^q) = 1, α ≥ 0.
+
+        Each iteration:
+          1. Additive gradient step:  α += ε · Aᵀ · (1 / (Aα))
+          2. Mean adjustment:          α += b · ((1 − bᵀα) / (bᵀb))
+          3. Non-negativity:           α = max(0, α)
+          4. Re-normalisation:         α = α / (bᵀα)
+        """
+        n_q, n_p = len(qx), len(px)
+
+        # Select centers from px (numerator / test) samples only
+        n_ctr = min(self.n_centers, n_p)
+        ctr_idx = np.random.choice(n_p, n_ctr, replace=False)
+        self.training_points = px[ctr_idx]
+
+        # A: kernel of test (p1) samples against centers  — shape (n_p, n_ctr)
+        # b: mean kernel of train (p0) samples against centers — shape (n_ctr, 1)
+        A = rbf_kernel(px, self.training_points, gamma=gamma)
+        b = np.mean(rbf_kernel(qx, self.training_points, gamma=gamma), axis=0)
+        b = b.reshape(n_ctr, 1)
+
+        # Initialise alpha as uniform positive vector
+        alpha = np.ones((n_ctr, 1)) / n_ctr
+        epsilon = self.kliep_epsilon
+        converged = False
+
+        for iteration in range(self.kliep_max_iter):
+            # 1. Compute ŵ(x^p) = A @ α
+            w_p = A @ alpha                     # (n_p, 1)
+            w_p = np.maximum(w_p, 1e-10)        # numerical stability
+
+            # 2. Additive gradient-ascent step
+            grad = A.T @ (1.0 / w_p)            # (n_ctr, 1)
+            alpha_new = alpha + epsilon * grad
+
+            # 3. Mean adjustment: enforce bᵀα = 1 in least-squares sense
+            b_dot_alpha = b.T @ alpha_new       # scalar
+            adjustment = b * ((1.0 - b_dot_alpha) / (b.T @ b))
+            alpha_new = alpha_new + adjustment
+
+            # 4. Project onto non-negative orthant
+            alpha_new = np.maximum(0, alpha_new)
+
+            # 5. Re-normalise
+            b_dot_new = b.T @ alpha_new
+            if b_dot_new < 1e-10:
+                print("KLIEP: degenerated (bᵀα ≈ 0), restarting with uniform α.")
+                alpha = np.ones((n_ctr, 1)) / n_ctr
+                epsilon = max(epsilon * 0.1, 1e-8)
+                continue
+            alpha_new = alpha_new / b_dot_new
+
+            # Check convergence
+            max_diff = np.max(np.abs(alpha_new - alpha))
+            alpha = alpha_new
+
+            if max_diff < 1e-6:
+                converged = True
                 print(f"KLIEP converged at iteration {iteration}")
                 break
-            
-            alpha = alpha_new
-            
-            if iteration % 200 == 0:
-                r_p0_mean = np.mean(K_p0 @ alpha)
-                r_p1_mean = np.mean(K_p1_train @ alpha)
-                print(f"KLIEP Iter {iteration}: R(p0)={r_p0_mean:.4f}, R(p1)={r_p1_mean:.4f}, alpha_norm={np.linalg.norm(alpha):.4f}")
-        
-        self.alpha = alpha
+
+            if iteration % 500 == 0:
+                r_q_mean = np.mean(rbf_kernel(qx, self.training_points, gamma=gamma) @ alpha)
+                r_p_mean = np.mean(w_p)
+                print(f"KLIEP Iter {iteration}: R(q)={r_q_mean:.4f}, R(p)={r_p_mean:.4f}, "
+                      f"|α|={np.linalg.norm(alpha):.4f}")
+
+        if not converged:
+            print(f"KLIEP: max iterations ({self.kliep_max_iter}) reached without convergence.")
+
+        # Store alpha as 1D array for consistency with predict
+        self.alpha = alpha.ravel()
     
     def _predict_batchwise(self, x, batch_size=1000):
         """Make predictions in batches."""
