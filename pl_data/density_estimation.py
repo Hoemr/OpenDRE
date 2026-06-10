@@ -5,7 +5,7 @@ from functools import partial
 import numpy as np
 from torch.utils.data import Dataset, IterableDataset, DataLoader
 
-from core import data_utils
+from utils import data_utils
 from .base import DataModule, IterDataModule
 
 

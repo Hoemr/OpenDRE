@@ -16,8 +16,8 @@ import nn_models as base_models
 from dre.estimators import get_likelihood_fn, get_density_ratio_fn, MetricEvaluator
 import dre.losses.losses as train_step_fns
 from pl_data import SPECS, DATA_SHAPES
-import core.visualization as vis_utils
-from core.sampling import sampling
+import utils.visualization as vis_utils
+from utils.sampling import sampling
 
 def make_mixture_mb(px, qx, beta: float):
     """

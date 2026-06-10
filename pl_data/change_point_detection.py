@@ -3,7 +3,7 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from core import data_utils
+from utils import data_utils
 from .base import DataModule
 
 

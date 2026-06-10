@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from dre.path import ImageInterpXt
 from pl_data import OOD_EVAL_CONFIG, OOD_IMGLIST_NEAR_FAR
 from .base import DensityRatioEstimationModel
-import core.visualization as vis_utils
+import utils.visualization as vis_utils
 
 _TRAIN_LOGGER_NAME = "training_logger"
 

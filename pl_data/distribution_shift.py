@@ -3,7 +3,7 @@
 import numpy as np
 from torch.utils.data import IterableDataset
 
-from core import data_utils
+from utils import data_utils
 from .base import IterDataModule
 
 DISTRIBUTION_SHIFT_DATASETS = ['gauss_shift', 'beta_shift', 'cifar_c', 'domainbed', 'gauss_shift_kl']
