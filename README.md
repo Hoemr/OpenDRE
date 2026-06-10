@@ -545,10 +545,46 @@ This framework integrates methods from multiple papers. Please cite the respecti
 
 ### Core Methods
 
-- **DRE∞**: Score-Based Generative Modeling through Stochastic Differential Equations
-- **D3RE**: Density Ratio Estimation via Denoising
-- **OS-DRE**: Optimal Score-Based Density Ratio Estimation
-- **ISA-DRE**: Interval Annealing for Score-Based DRE
+- **D3RE**: Dequantified Diffusion-Schrödinger Bridge for Density Ratio Estimation
+```bibtex
+@inproceedings{chen2025dequantified,
+  title={Dequantified Diffusion-Schr\"odinger Bridge for Density Ratio Estimation},
+  author={Wei Chen and Shigui Li and Jiacheng Li and Junmei Yang and John Paisley and Delu Zeng},
+  booktitle={International Conference on Machine Learning},
+  year={2025},
+  url={https://openreview.net/forum?id=zvyHCOcwsw}
+}
+```
+
+- **OS-DRE**: One-Step Score-Based Density Ratio Estimation
+```bibtex
+@article{chen2026one,
+  title={One-Step Score-Based Density Ratio Estimation},
+  author={Chen, Wei and Zhao, Qibin and Paisley, John and Yang, Junmei and Zeng, Delu},
+  journal={arXiv preprint arXiv:2604.10672},
+  year={2026}
+}
+```
+
+- **MVP-DRE**: A Minimum Variance Path Principle for Accurate and Stable Score-Based Density Ratio Estimation
+```bibtex
+@inproceedings{chen2026a,
+  title={A Minimum Variance Path Principle for Accurate and Stable Score-Based Density Ratio Estimation},
+  author={Wei Chen and Jiacheng Li and Shigui Li and Zhiqi Lin and Junmei Yang and John Paisley and Delu Zeng},
+  year={2026},
+  url={https://openreview.net/forum?id=vf16PZJWD1}
+}
+```
+
+- **ISA-DRE**: Diffusion Secant Alignment for Score-Based Density Ratio Estimation
+```bibtex
+@article{chen2025diffusion,
+  title={Diffusion Secant Alignment for Score-Based Density Ratio Estimation},
+  author={Chen, Wei and Li, Shigui and Li, Jiacheng and Xu, Jian and Lin, Zhiqi and Yang, Junmei and Zeng, Delu and Paisley, John and Zhao, Qibin},
+  journal={arXiv preprint arXiv:2509.04852},
+  year={2025}
+}
+```
 
 ### Applications
 
