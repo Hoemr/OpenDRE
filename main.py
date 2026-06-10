@@ -407,12 +407,6 @@ if __name__ == "__main__":
     # Enable Tensor Cores optimization if available
     setup_tensor_cores()
     
-    # Add models directory to Python path
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    models_dir = os.path.join(current_dir, "models")
-    if models_dir not in sys.path:
-        sys.path.insert(0, models_dir)
-
     if args.task == "likelihood_estimation":
         train_likelihood_estimation(args)
     elif args.task == "fdiv_estimation":
