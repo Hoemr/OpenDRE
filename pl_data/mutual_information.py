@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, IterableDataset, DataLoader
 
-from utils import data_utils
+from dre_utils import data_utils
 from .base import DataModule, IterDataModule
 
 

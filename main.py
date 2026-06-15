@@ -12,8 +12,8 @@ from pl_data import SUBTASK_DATA_MODULES
 from pl_models import SUBTASK_MODLE_MODULES
 
 from config import parse_args, get_save_path
-from utils.utils import set_random_seeds, makedirs
-import utils.logger as logger_utils
+from dre_utils.utils import set_random_seeds, makedirs
+import dre_utils.logger as logger_utils
 
 import warnings
 warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument.*")

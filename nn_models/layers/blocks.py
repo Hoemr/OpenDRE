@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .activations import ConvNormSilu
-from utils.utils import divergence_approx, divergence_bf, sample_gaussian_like, sample_rademacher_like
+from dre_utils.utils import divergence_approx, divergence_bf, sample_gaussian_like, sample_rademacher_like
 
 
 class FusedConvBlock(nn.Module):

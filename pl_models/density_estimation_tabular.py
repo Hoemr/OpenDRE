@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Density estimation: tabular."""
 import time
-import utils.visualization as vis_utils
+import dre_utils.visualization as vis_utils
 from .base import DensityEstimationModel
 
 class DensityEstimationTabularModel(DensityEstimationModel):

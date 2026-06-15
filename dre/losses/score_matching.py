@@ -7,7 +7,7 @@ import torch.autograd as autograd
 import torch.nn.functional as F
 import math
 
-from utils.utils import divergence_approx, jacobian_frobenius_divergence_approx
+from dre_utils.utils import divergence_approx, jacobian_frobenius_divergence_approx
 from dre.estimators import secant_to_tangent, get_density_ratio_fn
 
 

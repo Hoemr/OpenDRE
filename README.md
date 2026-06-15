@@ -54,7 +54,7 @@ The codebase is split into top-level packages for easier navigation:
 | `pl_data/` | Lightning DataModules and dataset configs |
 | `pl_models/` | Lightning modules per task |
 | `dre/` | Core DRE components: paths (`dre/path`), losses (`dre/losses`), estimators (`dre/estimators.py`), polynomial bases (`dre/polynomials.py`) |
-| `utils/` | Project helpers (utils.py, data_utils.py, tabular/), sampling routines, plotting/visualization, logger (`utils/logger.py`), and helper scripts (e.g. `download_ood_benchmark.py`). |
+| `dre_utils/` | Project helpers (utils.py, data_utils.py, tabular/), sampling routines, plotting/visualization, logger (`dre_utils/logger.py`), and helper scripts (e.g. `download_ood_benchmark.py`). |
 | `config/` | Argument parsing and save paths |
 
 Import examples: `from pl_data import SUBTASK_DATA_MODULES`, `from nn_models import JointScoreModel`, `from config import parse_args`, `from path import ToyInterpXt`.
@@ -254,7 +254,7 @@ Imglist mode uses **list files** (one line per `image_path label`) and matches t
 1. **Option A (recommended):** From OS_DRE repo, run our script (uses same OpenOOD Google Drive IDs):
    ```bash
    pip install gdown
-   python utils/download_ood_benchmark.py --save_dir ../data
+   python dre_utils/download_ood_benchmark.py --save_dir ../data
    ```
    This creates `../data/benchmark_imglist/` (all txt lists) and `../data/images_classic/{cifar10,cifar100,tin,mnist,svhn}/`. Then set `--data_dir ../data`.
 
@@ -343,7 +343,7 @@ This section summarizes where the data for each task/subtask comes from, where i
 - **Imglist-style OOD (OpenOOD-style)**  
   Two options:  
   **Option A**: use the helper script  
-  `python utils/download_ood_benchmark.py`  
+  `python dre_utils/download_ood_benchmark.py`  
   This downloads `benchmark_imglist` and `images_classic` into the configured data directory (either from the script or environment variables).  
   **Option B**: clone [OpenOOD](https://github.com/Jingkang50/OpenOOD) and prepare `benchmark_imglist/` and `images_classic/` as described in its documentation, then place them under `{data_dir}` so that the layout matches `pl_data/ood_detection.py` (`OOD_IMGLIST_BENCHMARKS`, `list_subdir`/`image_subdir`, including near- and far-OOD).  
   When using imglist mode, set `--ood_use_imglist True`; only `cifar10` and `cifar100` are supported as ID datasets.
@@ -457,7 +457,7 @@ No need to copy large blocks: open the corresponding file for an existing subtas
 ## Key Conventions
 
 - **Density ratio**: Many tasks use **qx** (reference, e.g. t=0) and **px** (target, e.g. t=1). The model estimates r(x) = px(x) / qx(x). Batch format is often `(qx, px)` or `(x0, x1)`.
-- **New datasets**: For synthetic data, add a generator in `utils/` (e.g. `data_utils.py`) and wire it in the task’s DataModule. For tabular/image, add the name to the task list in `pl_data` and implement loading in that DataModule.
+- **New datasets**: For synthetic data, add a generator in `dre_utils/` (e.g. `data_utils.py`) and wire it in the task’s DataModule. For tabular/image, add the name to the task list in `pl_data` and implement loading in that DataModule.
 - **Custom losses**: Implement a train-step callable (e.g. `def __call__(self, model, batch, step) -> dict`) and use it in the task’s `set_basic_functions()` / `train_step_fn`. See `losses/score_matching.py`, `losses/kernel_density_ratio.py`, `losses/neural_density_ratio.py` for the expected interface.
 
 ## Model Architecture (nn_models/)
@@ -534,7 +534,7 @@ OpenDRE/
 ├── nn_models/        # Model architectures (tabular_models, image_models, legacy UnifiedModel wrapper, plus layers)
 ├── nsf/              # Original NSF codebase (flows, datasets, experiments, checkpoints)
 ├── dre/              # Core DRE components: paths, losses, estimators, polynomial bases
-├── utils/            # Utilities, data_utils, logger, sampling, visualization, helper scripts
+├── dre_utils/            # Utilities, data_utils, logger, sampling, visualization, helper scripts
 └── results/          # Experiment logs, figures, and tables
 ```
 

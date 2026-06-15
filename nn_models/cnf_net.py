@@ -3,7 +3,7 @@
 import torch
 from torchdiffeq import odeint_adjoint as odeint
 
-from utils.utils import _flip
+from dre_utils.utils import _flip
 from .tabular_models import JointScoreModel
 from nn_models.layers.blocks import ODEfunc
 

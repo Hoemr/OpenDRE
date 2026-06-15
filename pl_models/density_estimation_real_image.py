@@ -14,8 +14,8 @@ import nn_models as base_models
 import dre.losses.losses as train_step_fns
 from pl_data import DATA_SHAPES, SPECS
 from dre.path import ImageInterpXt
-import utils.visualization as vis_utils
-from utils.sampling import sampling
+import dre_utils.visualization as vis_utils
+from dre_utils.sampling import sampling
 
 from .base import DensityEstimationModel
 
