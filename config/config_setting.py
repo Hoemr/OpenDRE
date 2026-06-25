@@ -94,6 +94,18 @@ def get_common_args(parser):
     parser.add_argument("--t_mode", type=str, default="uniform", choices=["uniform", "IS", "lognorm"])
     parser.add_argument("--aligned_ratio", type=float, default=0.5)
 
+    # Auxiliary Bregman loss for score matching
+    parser.add_argument("--auxiliary_loss", action='store_true', default=False)
+    parser.add_argument("--auxiliary_quad_steps", type=int, default=5)
+    parser.add_argument("--bregman_weight", type=float, default=1.0)
+    parser.add_argument(
+        "--bregman_type",
+        type=str,
+        default="logistic",
+        choices=["logistic", "kl", "pearson", "itakura_saito"],
+    )
+    parser.add_argument("--clip_tau", type=float, default=5.0)
+
     # sampling
     parser.add_argument("--sampling_only", action='store_true', default=False)
     parser.add_argument("--test_only", action='store_true', default=False)

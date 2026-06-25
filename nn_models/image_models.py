@@ -322,6 +322,7 @@ class _BaseImageTimeDependentModel(_BaseImageModel):
                 norm_type=image_backbone_norm,
                 nonlinearity=nonlinearity,
                 num_groups=num_groups,
+                in_channels=in_channels,
             )
         elif backbone in ["resnet18", "resnet34", "resnet50"]:
             self.backbone_net = getattr(
@@ -331,6 +332,7 @@ class _BaseImageTimeDependentModel(_BaseImageModel):
                 norm_type=image_backbone_norm,
                 nonlinearity=nonlinearity,
                 num_groups=num_groups,
+                in_channels=in_channels,
             )
         else:
             raise ValueError(f"Unsupported backbone: {backbone}")
@@ -434,6 +436,7 @@ class ImageJointScoreModel(_BaseImageTimeDependentModel):
 
         # Time embedding
         self._build_time_embedding(embed_dim)
+
 
         if backbone == "unet":
             self._build_unet_architecture(
@@ -565,6 +568,7 @@ class ResNetDensityRatioModel(_BaseImageModel):
                 norm_type=norm_type,
                 nonlinearity=nonlinearity,
                 num_groups=num_groups,
+                in_channels=in_channels,
             )
         elif backbone in ["resnet18", "resnet34", "resnet50"]:
             self.backbone_net = getattr(
@@ -574,6 +578,7 @@ class ResNetDensityRatioModel(_BaseImageModel):
                 norm_type=norm_type,
                 nonlinearity=nonlinearity,
                 num_groups=num_groups,
+                in_channels=in_channels,
             )
         else:
             raise ValueError(f"Unsupported backbone: {backbone}")
@@ -592,4 +597,3 @@ class ResNetDensityRatioModel(_BaseImageModel):
 
     def forward(self, x, cond=None, joint=True):
         return self._forward_density_ratio(x)
-

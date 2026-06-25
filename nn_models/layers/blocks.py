@@ -153,6 +153,7 @@ class ResidualBlockWithTime(nn.Module):
     """ResidualBlock with time injection."""
     def __init__(self, in_dim, out_dim, embed_dim, activation, dropout=0.1, norm=True, use_spectral_norm=False, pre_norm=True):
         super().__init__()
+        self.embed_dim = embed_dim
         if use_spectral_norm:
             self.linear = nn.utils.spectral_norm(nn.Linear(in_dim, out_dim))
         else:
@@ -303,12 +304,22 @@ class ResNet(nn.Module):
     3. Final norm-act before pooling
     norm_type: "batchnorm" or "groupnorm". nonlinearity: "relu" or "leakyrelu".
     """
-    def __init__(self, block, layers, out_dim=1, num_classes=1000, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
+    def __init__(
+        self,
+        block,
+        layers,
+        out_dim=1,
+        num_classes=1000,
+        norm_type="batchnorm",
+        nonlinearity="relu",
+        num_groups=8,
+        in_channels=3,
+    ):
         super(ResNet, self).__init__()
         self.in_channels = 64
         norm_layer = lambda c: _make_norm2d(norm_type, c, num_groups)
         self._activation = _make_activation(nonlinearity)
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = norm_layer(64)
         self.relu = self._activation
         self.layer1 = self._make_layer(block, 64, layers[0], norm_layer, self._activation)
@@ -362,16 +373,40 @@ def _init_resnet_weights(module, nonlinearity="relu"):
             nn.init.constant_(m.bias, 0)
 
 
-def ResNet18(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
-    return ResNet(BasicBlock, [2, 2, 2, 2], out_dim=out_dim, norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups)
+def ResNet18(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8, in_channels=3):
+    return ResNet(
+        BasicBlock,
+        [2, 2, 2, 2],
+        out_dim=out_dim,
+        norm_type=norm_type,
+        nonlinearity=nonlinearity,
+        num_groups=num_groups,
+        in_channels=in_channels,
+    )
 
 
-def ResNet34(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
-    return ResNet(BasicBlock, [3, 4, 6, 3], out_dim=out_dim, norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups)
+def ResNet34(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8, in_channels=3):
+    return ResNet(
+        BasicBlock,
+        [3, 4, 6, 3],
+        out_dim=out_dim,
+        norm_type=norm_type,
+        nonlinearity=nonlinearity,
+        num_groups=num_groups,
+        in_channels=in_channels,
+    )
 
 
-def ResNet50(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
-    return ResNet(Bottleneck, [3, 4, 6, 3], out_dim=out_dim, norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups)
+def ResNet50(out_dim=1, norm_type="batchnorm", nonlinearity="relu", num_groups=8, in_channels=3):
+    return ResNet(
+        Bottleneck,
+        [3, 4, 6, 3],
+        out_dim=out_dim,
+        norm_type=norm_type,
+        nonlinearity=nonlinearity,
+        num_groups=num_groups,
+        in_channels=in_channels,
+    )
 
 
 class WideResNetBasicBlock(nn.Module):
@@ -419,7 +454,17 @@ class WideResNetNetworkBlock(nn.Module):
 
 
 class WideResNet(nn.Module):
-    def __init__(self, depth=28, widen_factor=10, num_classes=10, dropRate=0.3, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
+    def __init__(
+        self,
+        depth=28,
+        widen_factor=10,
+        num_classes=10,
+        dropRate=0.3,
+        norm_type="batchnorm",
+        nonlinearity="relu",
+        num_groups=8,
+        in_channels=3,
+    ):
         super(WideResNet, self).__init__()
         nChannels = [16, 16 * widen_factor, 32 * widen_factor, 64 * widen_factor]
         assert (depth - 4) % 6 == 0
@@ -427,7 +472,7 @@ class WideResNet(nn.Module):
         block = WideResNetBasicBlock
         norm_layer = lambda c: _make_norm2d(norm_type, c, num_groups)
         activation = _make_activation(nonlinearity)
-        self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(in_channels, nChannels[0], kernel_size=3, stride=1, padding=1, bias=False)
         self.block1 = WideResNetNetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate, norm_layer, activation)
         self.block2 = WideResNetNetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropRate, norm_layer, activation)
         self.block3 = WideResNetNetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate, norm_layer, activation)
@@ -446,10 +491,19 @@ class WideResNet(nn.Module):
         out = self.block2(out)
         out = self.block3(out)
         out = self.relu(self.bn1(out))
-        out = F.avg_pool2d(out, 8)
+        out = F.adaptive_avg_pool2d(out, 1)
         out = out.view(-1, self.nChannels)
         return self.fc(out)
 
 
-def WideResNet2810(out_dim=10, dropRate=0.3, norm_type="batchnorm", nonlinearity="relu", num_groups=8):
-    return WideResNet(depth=28, widen_factor=10, num_classes=out_dim, dropRate=dropRate, norm_type=norm_type, nonlinearity=nonlinearity, num_groups=num_groups)
+def WideResNet2810(out_dim=10, dropRate=0.3, norm_type="batchnorm", nonlinearity="relu", num_groups=8, in_channels=3):
+    return WideResNet(
+        depth=28,
+        widen_factor=10,
+        num_classes=out_dim,
+        dropRate=dropRate,
+        norm_type=norm_type,
+        nonlinearity=nonlinearity,
+        num_groups=num_groups,
+        in_channels=in_channels,
+    )

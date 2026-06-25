@@ -121,7 +121,13 @@ class DensityEstimationRealImageModel(DensityEstimationModel):
         in_channels = self.args.in_channels
         image_backbone = getattr(self.args, "image_backbone", "resnet18")
         image_dropout = getattr(self.args, "image_dropout", 0.3)
-        return base_models.ImageJointScoreModel(
+
+        if "unet" == image_backbone: 
+            score_model = base_models.ImageJointScoreModel
+        else:
+            score_model = base_models.ImageJointScoreModelResNet
+            
+        return score_model(
             args=self.args,
             in_channels=in_channels,
             hidden_channels=hidden_channels,

@@ -40,4 +40,18 @@ class MIRealDataModel(DensityRatioEstimationModel):
         in_channels = self.data_shape[0] * 2
         image_backbone = getattr(self.args, "image_backbone", "resnet18")
         image_dropout = getattr(self.args, "image_dropout", 0.3)
-        return base_models.ImageJointScoreModel(args=self.args, in_channels=in_channels, hidden_channels=hidden_channels, embed_dim=self.args.embed_dim, nonlinearity=self.args.nonlinearity, backbone=image_backbone, dropout=image_dropout)
+
+        if "unet" == image_backbone: 
+            score_model = base_models.ImageJointScoreModel
+        else:
+            score_model = base_models.ImageJointScoreModelResNet
+            
+        return score_model(
+            args=self.args, 
+            in_channels=in_channels, 
+            hidden_channels=hidden_channels, 
+            embed_dim=self.args.embed_dim, 
+            nonlinearity=self.args.nonlinearity, 
+            backbone=image_backbone, 
+            dropout=image_dropout
+        )
