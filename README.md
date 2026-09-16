@@ -438,7 +438,7 @@ main.py → pl_data (DataModule) → pl_models (Lightning module) → training
 - **main.py**: Entry point and argument parsing.
 - **pl_data/**: DataModules and dataset configs; register in `SUBTASK_DATA_MODULES`.
 - **pl_models/**: Lightning modules per task; register in `SUBTASK_MODLE_MODULES`.
-- **config/**: Task-specific arguments (e.g. `get_fdiv_args`, `get_likelihood_args`).
+- **config/**: Argument parsing: `common_args.py` (shared flags), `tasks/` (one module per task), `parser.py` (`parse_args`), `save_path.py` (`get_save_path`).
 - **nn_models/**: Model architectures used by `pl_models` via `build_model()`.
 
 ## Adding a New Task (Checklist)
@@ -447,7 +447,7 @@ Use an existing task (e.g. OOD detection in `pl_models/ood_detection.py`, `pl_da
 
 | Step | Where | What to do |
 |------|--------|------------|
-| 1 | `config/config_setting.py` | Add arguments in the right `get_*_args()` (e.g. `get_fdiv_args`). |
+| 1 | `config/tasks/` | Add arguments in the right `get_*_args()` (e.g. `get_fdiv_args` in `tasks/fdiv.py`); shared flags go to `config/common_args.py`. |
 | 2 | `pl_data/` | Add dataset name to the task’s list; implement a DataModule and register it in `SUBTASK_DATA_MODULES`. |
 | 3 | `pl_models/` | Add a Lightning module (inherit from `BaseDREMetrics` or the task base); implement `build_model()`, `training_step`, and optionally `validation_step`; register in `SUBTASK_MODLE_MODULES`. |
 | 4 | `main.py` | In the task branch, instantiate your DataModule and Model and pass them to the trainer. |
@@ -528,7 +528,7 @@ You **do not** need to modify `UnifiedModel` when adding a new model. Instead:
 ```
 OpenDRE/
 ├── main.py
-├── config/           # Argument parsing (e.g. config_setting.py)
+├── config/           # Argument parsing (constants, common_args, tasks/, parser, save_path)
 ├── pl_data/          # DataModules and dataset configs
 ├── pl_models/        # Lightning modules per task
 ├── nn_models/        # Model architectures (tabular_models, image_models, legacy UnifiedModel wrapper, plus layers)
