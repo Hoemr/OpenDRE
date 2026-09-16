@@ -233,7 +233,7 @@ def parse_args():
 
     if args.decomp:
         args.sub_method = "score"
-        args.subsub_method == "osdre"
+        args.subsub_method = "osdre"
 
     if args.subsub_method == "dre_infty":
         args.sub_method = "score"
