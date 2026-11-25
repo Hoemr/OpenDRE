@@ -1,39 +1,48 @@
-# OpenDRE: A Unified Framework for Density Ratio Estimation
+# OpenDRE · Density Ratio Estimation in PyTorch
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-This repository provides a unified implementation of density ratio estimation methods, integrating multiple state-of-the-art papers from top-tier machine learning venues (NeurIPS, ICML, ICLR). The framework supports likelihood estimation, f-divergence estimation, mutual information estimation, change point detection, and out-of-distribution (OOD) detection.
+OpenDRE estimates the **density ratio** $r(x)=p(x)/q(x)$ from samples drawn from two distributions. The ratio tells you where an observation is more likely under one distribution than the other. Averaging the log ratio of paired to independent observations gives mutual information. Comparing target to source covariate densities gives importance weights.
 
-## Overview
+[Installation](#installation) · [Gaussian mutual information example](#example-mutual-information-for-a-gaussian-pair) · [CLI examples](#command-line-interface) · [Citation](#citation)
 
-Score-based generative modeling has emerged as a powerful paradigm for learning complex probability distributions. This framework unifies multiple approaches:
+## Find an application
 
-- **Score-based Methods**: DRE-$\infty$, D$^3$RE, OS-DRE, ISA-DRE, MVP-DRE
-- **Kernel Methods**: Kernel Density Ratio Estimation
-- **Neural Methods**: KULSIF, NCE, InfoNCE, RKL, Hellinger, KL, Gamma, EW, PW
-- **Continuous Normalizing Flows**: ODE-based likelihood computation
+| Research question | How the ratio is used | Start here |
+|---|---|---|
+| **Mutual information estimation** — How dependent are $X$ and $Y$? | Average the log ratio of the joint density to the product of marginals over paired observations. | [Synthetic benchmarks](pl_data/mutual_information.py) · [Image and text benchmarks](pl_data/mi_real.py) |
+| **Distribution shift and divergence estimation** — How different are two populations? | Compare source and target samples and summarize the shift with an estimated divergence. | [Distribution shift experiments](pl_data/distribution_shift.py) |
+| **Out-of-distribution (OOD) detection** — Which inputs look atypical? | Rank inputs using a learned score and evaluate against near-OOD and far-OOD image datasets. | [Datasets and commands](#ood-detection-tasks-and-parameters) |
+| **Change point detection** — When does a data stream change? | Use observations from different windows to score a potential change in distribution. | [Change point model](pl_models/change_point_detection.py) |
+| **Likelihood estimation** — What density does the model assign to an observation? | Estimate a ratio against a reference density on synthetic, tabular, or image data. | [Likelihood estimation tasks](config/tasks/likelihood.py) |
 
+**Two-sample testing.** For the hypothesis $P=Q$, the population ratio equals one wherever $q>0$. OpenDRE includes a [Gaussian two-sample generator](pl_data/two_sample_test.py) and an [experimental permutation-test implementation](pl_models/two_sample_test.py). These are source-level components. The [CLI task registry](config/tasks/fdiv.py) lists the experiments available from `main.py`.
 
-### Key Features
+**Causal inference and covariate shift.** The ratio $p_{\mathrm{target}}(x)/p_{\mathrm{source}}(x)$ reweights source covariates toward a target population. In causal transportability studies, these weights can help generalize a trial effect under covariate overlap and assumptions about treatment effects across populations. OpenDRE covers the ratio-estimation step. The causal estimand, identifying assumptions, and uncertainty calculation belong to the downstream analysis. [Example of trial transport weighting](https://pmc.ncbi.nlm.nih.gov/articles/PMC5860052/)
 
-- 🚀 **Unified Interface**: Single entry point (`main.py`) for all tasks and methods
-- 📊 **Comprehensive Benchmarks**: Synthetic 2D, tabular, image datasets
-- 🔧 **Flexible Configuration**: Extensive hyperparameter control via command-line args
-- 📈 **Multi-Task Support**: Likelihood estimation, f-divergence, MI, CPD, OOD detection
-- 🖼️ **Image Backbones**: Support for ResNet and WideResNet architectures
+## Estimators
+
+Compare score-based density ratio estimation with neural objectives such as noise-contrastive estimation (NCE) and InfoNCE, or with [kernel estimators](nn_models/kernel_dre.py) such as KuLSIF. The score-based methods include DRE-∞, D³RE, OS-DRE, ISA-DRE, and the minimum variance path principle. Continuous normalizing flows provide a separate likelihood baseline.
+
+| Score-based method | Paper |
+|---|---|
+| D³RE · diffusion bridges for density ratio estimation | [ICML 2025](https://openreview.net/forum?id=zvyHCOcwsw) |
+| Minimum variance paths for score-based density ratio estimation | [ICLR 2026](https://openreview.net/forum?id=vf16PZJWD1) |
+| OS-DRE · one-step score-based density ratio estimation | [arXiv](https://arxiv.org/abs/2604.10672) |
+| ISA-DRE · diffusion secant alignment for density ratio estimation | [arXiv](https://arxiv.org/abs/2509.04852) |
 
 ## Installation
 
 ```bash
+git clone https://github.com/Hoemr/OpenDRE.git
+cd OpenDRE
+
 # Create conda environment
 conda create -n os_dre python=3.10
 conda activate os_dre
 
 # Install dependencies
 pip install -r requirements.txt
-
-# For NSF flows (optional, for real image experiments)
-cd nsf && pip install -e .
 ```
 
 ### Requirements
@@ -44,22 +53,19 @@ cd nsf && pip install -e .
 - torchdiffeq, torchquad
 - See `requirements.txt` for full list
 
-## Project structure (flat packages, no `models/`)
-
-The codebase is split into top-level packages for easier navigation:
-
-| Package | Contents |
-|---------|----------|
-| `nn_models/` | Neural network models (`tabular_models`, `image_models`, legacy `UnifiedModel` wrapper, plus logical `layers` modules) |
-| `pl_data/` | Lightning DataModules and dataset configs |
-| `pl_models/` | Lightning modules per task |
-| `dre/` | Core DRE components: paths (`dre/path`), losses (`dre/losses`), estimators (`dre/estimators.py`), polynomial bases (`dre/polynomials.py`) |
-| `dre_utils/` | Project helpers (utils.py, data_utils.py, tabular/), sampling routines, plotting/visualization, logger (`dre_utils/logger.py`), and helper scripts (e.g. `download_ood_benchmark.py`). |
-| `config/` | Argument parsing and save paths |
-
-Import examples: `from pl_data import SUBTASK_DATA_MODULES`, `from nn_models import JointScoreModel`, `from config import parse_args`, `from path import ToyInterpXt`.
-
 ## Quick Start
+
+### Example: mutual information for a Gaussian pair
+
+For two standard Gaussian variables with correlation $\rho=0.8$, the exact mutual information is $-\tfrac12\log(1-\rho^2)\approx 0.511$ nats. The synthetic experiment generates correlated pairs and shuffles the coordinates to sample the product of their marginals. After installation, run this from the repository root to fit a neural ratio estimator:
+
+```bash
+python main.py fdiv_estimation --subtask mutual_information --data gauss \
+  --sub_method neural --subsub_method nce --d 2 --rho 0.8 \
+  --batch_size 256 --test_batch_size 512 --epochs 100
+```
+
+Use 0.511 nats as the population reference when interpreting the estimate. See the [Gaussian data generator](dre_utils/data_utils.py) for the sampling procedure and the reference calculation.
 
 ### Command Line Interface
 
@@ -522,6 +528,21 @@ You **do not** need to modify `UnifiedModel` when adding a new model. Instead:
     `nn_models/unified.py` to route a new `(data_type, model_type, backbone)` combination
     to your new concrete model. For all new code paths, prefer using
     `tabular_models` / `image_models` directly.
+
+## Project structure (flat packages, no `models/`)
+
+The codebase is split into top-level packages for easier navigation:
+
+| Package | Contents |
+|---------|----------|
+| `nn_models/` | Neural network models (`tabular_models`, `image_models`, legacy `UnifiedModel` wrapper, plus logical `layers` modules) |
+| `pl_data/` | Lightning DataModules and dataset configs |
+| `pl_models/` | Lightning modules per task |
+| `dre/` | Core DRE components: paths (`dre/path`), losses (`dre/losses`), estimators (`dre/estimators.py`), polynomial bases (`dre/polynomials.py`) |
+| `dre_utils/` | Project helpers (utils.py, data_utils.py, tabular/), sampling routines, plotting/visualization, logger (`dre_utils/logger.py`), and helper scripts (e.g. `download_ood_benchmark.py`). |
+| `config/` | Argument parsing and save paths |
+
+Import examples: `from pl_data import SUBTASK_DATA_MODULES`, `from nn_models import JointScoreModel`, `from config import parse_args`, `from dre.path import ToyInterpXt`.
 
 ## Directory Layout
 
